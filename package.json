@@ -1,0 +1,17 @@
+{
+  "name": "direxio-cli-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm --workspace @direxio/cli run build",
+    "test": "npm --workspace @direxio/cli run test",
+    "typecheck": "npm --workspace @direxio/cli run typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
