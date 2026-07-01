@@ -18,6 +18,11 @@ This file records verified migration progress. A module is marked complete only 
   - migrated tool contracts: `list_contacts`, `search_rooms`, `send_message`, `list_messages`, `list_room_members`, `list_channel_posts`, `list_post_comments`, `comment_channel_post`.
   - `list_messages` defaults to the service agent room when no `room_id` is passed.
   - `send_message` refuses to target the service agent room.
+- Connect daemon management slice:
+  - `direxio connect status --service <service_id> --json`
+  - `direxio connect logs --service <service_id> -n <lines>`
+  - `direxio connect restart --service <service_id> --json`
+  - commands invoke `direxio-connect daemon ... --service-name <service_id>` and fail if the underlying command fails.
 
 Verified by:
 
@@ -37,7 +42,7 @@ These modules are not migrated and must not be reported as complete:
 - `direxio reset-app-data`
 - `direxio verify runtime`
 - `direxio confirm app-initialization`
-- `direxio connect install/status/logs/restart`
+- `direxio connect install`
 - `direxio mcp install/status/proxy`
 - `direxio skill install/update/refresh`
 - compatibility wrappers for existing shell and PowerShell entrypoints

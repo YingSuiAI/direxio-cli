@@ -1,12 +1,14 @@
 #!/usr/bin/env node
+import { connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
 import { callMcpTool, createDoctorReport, listMcpTools } from "./mcp.js";
-import { loadServiceConfig, writeActiveService } from "./service-context.js";
+import { loadServiceConfig, resolveServiceContext, writeActiveService } from "./service-context.js";
 
 export interface CliRuntime {
   homeDir?: string;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
   fetch?: typeof fetch;
+  runner?: CommandRunner;
 }
 
 export async function runCli(argv: string[] = process.argv.slice(2), runtime: CliRuntime = {}): Promise<number> {
@@ -28,7 +30,10 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     if (command === "mcp") {
       return await runMcp(rest, runtime, stdout);
     }
-    if (["deploy", "status", "destroy", "update", "reset-app-data", "verify", "confirm", "connect", "skill"].includes(command)) {
+    if (command === "connect") {
+      return await runConnect(rest, runtime, stdout);
+    }
+    if (["deploy", "status", "destroy", "update", "reset-app-data", "verify", "confirm", "skill"].includes(command)) {
       stderr(`${command} migration is planned but not implemented in this slice`);
       return 2;
     }
@@ -37,6 +42,28 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     stderr(error instanceof Error ? error.message : String(error));
     return 1;
   }
+}
+
+async function runConnect(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {
+  const [action, ...rest] = argv;
+  const serviceId = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") }).serviceId;
+  if (action === "status") {
+    printValue(await connectStatus(serviceId, { runner: runtime.runner }), rest.includes("--json"), stdout);
+    return 0;
+  }
+  if (action === "logs") {
+    const lines = Number(optionValue(rest, "-n") ?? optionValue(rest, "--lines") ?? "120");
+    stdout(await connectLogs(serviceId, { runner: runtime.runner, lines }));
+    return 0;
+  }
+  if (action === "restart") {
+    printValue(await connectRestart(serviceId, { runner: runtime.runner }), rest.includes("--json"), stdout);
+    return 0;
+  }
+  if (action === "install") {
+    throw new Error("connect install migration is planned but not implemented in this slice");
+  }
+  throw new Error("connect requires install, status, logs, or restart");
 }
 
 async function runMcp(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {

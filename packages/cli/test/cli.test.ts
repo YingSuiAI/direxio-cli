@@ -38,4 +38,33 @@ describe("direxio CLI", () => {
     });
     expect(stdout.join("\n")).not.toContain("agent-secret");
   });
+
+  it("routes connect status through the service-scoped daemon command", async () => {
+    const stdout: string[] = [];
+    const commands: Array<{ command: string; args: string[] }> = [];
+
+    const code = await runCli(["connect", "status", "--service", "im", "--json"], {
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async (command, args) => {
+        commands.push({ command, args });
+        return {
+          stdout: "Status: Running\nWorkDir: C:/Users/alice/.direxio/nodes/im/direxio-connect\n",
+          stderr: "",
+          exitCode: 0
+        };
+      }
+    });
+
+    expect(code).toBe(0);
+    expect(commands).toEqual([
+      { command: "direxio-connect", args: ["daemon", "status", "--service-name", "im"] }
+    ]);
+    expect(JSON.parse(stdout.join("\n"))).toEqual({
+      service_id: "im",
+      status: "Running",
+      work_dir: "C:/Users/alice/.direxio/nodes/im/direxio-connect",
+      raw: "Status: Running\nWorkDir: C:/Users/alice/.direxio/nodes/im/direxio-connect\n"
+    });
+  });
 });
