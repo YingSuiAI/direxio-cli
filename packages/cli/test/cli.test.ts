@@ -4,6 +4,24 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runCli } from "../src/index.js";
 
+function writeServiceCredentials(home: string, serviceId: string): void {
+  const serviceDir = join(home, ".direxio", "nodes", serviceId);
+  mkdirSync(serviceDir, { recursive: true });
+  writeFileSync(
+    join(serviceDir, "credentials.json"),
+    JSON.stringify({
+      profiles: {
+        default: {
+          direxio_domain: `https://${serviceId}`,
+          direxio_agent_token: "agent-secret",
+          direxio_agent_room_id: `!agents:${serviceId}`,
+          direxio_agent_node_id: "codex-im"
+        }
+      }
+    })
+  );
+}
+
 describe("direxio CLI", () => {
   it("prints JSON mcp doctor reports", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
@@ -94,5 +112,91 @@ describe("direxio CLI", () => {
       status: "Stopped",
       url: ""
     });
+  });
+
+  it("routes mcp install through npm and daemon install", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    writeServiceCredentials(home, "im.example.com");
+    const stdout: string[] = [];
+    const commands: Array<{ command: string; args: string[] }> = [];
+
+    const code = await runCli(["mcp", "install", "--service", "im.example.com", "--json"], {
+      homeDir: home,
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async (command, args) => {
+        commands.push({ command, args });
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(code).toBe(0);
+    expect(commands).toEqual([
+      { command: "npm", args: ["install", "-g", "direxio-mcp@latest"] },
+      {
+        command: "direxio-mcp",
+        args: [
+          "daemon",
+          "install",
+          "--service-name",
+          "im.example.com",
+          "--credentials-file",
+          join(home, ".direxio", "nodes", "im.example.com", "credentials.json"),
+          "--node-id",
+          "codex-im",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "19757"
+        ]
+      }
+    ]);
+    expect(JSON.parse(stdout.join("\n"))).toEqual({
+      ok: true,
+      service_id: "im.example.com",
+      package: "direxio-mcp@latest",
+      daemon_url: "http://127.0.0.1:19757/mcp"
+    });
+  });
+
+  it("routes mcp proxy through the stdio proxy command", async () => {
+    const stdout: string[] = [];
+    const commands: Array<{ command: string; args: string[] }> = [];
+
+    const code = await runCli(["mcp", "proxy"], {
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async (command, args) => {
+        commands.push({ command, args });
+        return { stdout: "proxy exited\n", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(code).toBe(0);
+    expect(commands).toEqual([
+      { command: "direxio-mcp", args: ["proxy", "--url", "http://127.0.0.1:19757/mcp"] }
+    ]);
+    expect(stdout.join("\n")).toBe("proxy exited\n");
+  });
+
+  it("does not treat mcp target snippet installation as migrated", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    writeServiceCredentials(home, "im.example.com");
+    const stderr: string[] = [];
+    const commands: Array<{ command: string; args: string[] }> = [];
+
+    const code = await runCli(["mcp", "install", "--service", "im.example.com", "--target", "codex"], {
+      homeDir: home,
+      stdout: () => {},
+      stderr: (line) => stderr.push(line),
+      runner: async (command, args) => {
+        commands.push({ command, args });
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(code).toBe(1);
+    expect(commands).toEqual([]);
+    expect(stderr.join("\n")).toContain("mcp install --target migration is planned");
   });
 });

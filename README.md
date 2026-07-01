@@ -11,7 +11,10 @@ direxio deploy
 direxio status
 direxio destroy
 direxio connect status
+direxio mcp install --service <service-id>
+direxio mcp status --service <service-id>
 direxio mcp doctor
+direxio mcp proxy
 direxio mcp call list_messages --json '{"limit":20}'
 direxio skill install --agent codex
 ```

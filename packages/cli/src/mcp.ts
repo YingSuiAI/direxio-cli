@@ -76,6 +76,17 @@ export interface DoctorReport {
 export interface McpRuntimeOptions {
   runner?: CommandRunner;
   binary?: string;
+  npmBinary?: string;
+  npmPackage?: string;
+  host?: string;
+  port?: string;
+}
+
+export interface McpInstallReport {
+  ok: true;
+  service_id: string;
+  package: string;
+  daemon_url: string;
 }
 
 export function createDoctorReport(config: ServiceConfig): DoctorReport {
@@ -129,14 +140,70 @@ export async function mcpDaemonStatus(serviceId: string, options: McpRuntimeOpti
   return parseJsonObject(result.stdout);
 }
 
+export async function installMcpDaemon(config: ServiceConfig, options: McpRuntimeOptions = {}): Promise<McpInstallReport> {
+  const packageName = mcpNpmPackage(options);
+  await runCommand(options, options.npmBinary ?? "npm", ["install", "-g", packageName]);
+
+  const args = [
+    "daemon",
+    "install",
+    "--service-name",
+    config.serviceId,
+    "--credentials-file",
+    config.credentialsFile
+  ];
+  if (config.agentNodeId) {
+    args.push("--node-id", config.agentNodeId);
+  }
+  args.push("--host", mcpDaemonHost(options), "--port", mcpDaemonPort(options));
+
+  await runMcpDaemon(options, args);
+  return {
+    ok: true,
+    service_id: config.serviceId,
+    package: packageName,
+    daemon_url: mcpDaemonUrl(options)
+  };
+}
+
+export async function mcpDaemonProxy(options: McpRuntimeOptions = {}): Promise<CommandResult> {
+  return runMcpDaemon(options, ["proxy", "--url", mcpDaemonUrl(options)]);
+}
+
+export function mcpProxyCommand(options: McpRuntimeOptions = {}): { command: string; args: string[] } {
+  return {
+    command: options.binary ?? "direxio-mcp",
+    args: ["proxy", "--url", mcpDaemonUrl(options)]
+  };
+}
+
 async function runMcpDaemon(options: McpRuntimeOptions, args: string[]): Promise<CommandResult> {
+  return runCommand(options, options.binary ?? "direxio-mcp", args);
+}
+
+async function runCommand(options: McpRuntimeOptions, command: string, args: string[]): Promise<CommandResult> {
   const runner = options.runner ?? defaultRunner;
-  const binary = options.binary ?? "direxio-mcp";
-  const result = await runner(binary, args);
+  const result = await runner(command, args);
   if (result.exitCode !== 0) {
-    throw new Error((result.stderr || result.stdout || `direxio-mcp exited with ${result.exitCode}`).trim());
+    throw new Error((result.stderr || result.stdout || `${command} exited with ${result.exitCode}`).trim());
   }
   return result;
+}
+
+function mcpNpmPackage(options: McpRuntimeOptions): string {
+  return options.npmPackage ?? process.env.DIREXIO_MCP_NPM_PACKAGE ?? "direxio-mcp@latest";
+}
+
+function mcpDaemonHost(options: McpRuntimeOptions): string {
+  return options.host ?? process.env.DIREXIO_MCP_DAEMON_HOST ?? "127.0.0.1";
+}
+
+function mcpDaemonPort(options: McpRuntimeOptions): string {
+  return options.port ?? process.env.DIREXIO_MCP_DAEMON_PORT ?? "19757";
+}
+
+function mcpDaemonUrl(options: McpRuntimeOptions): string {
+  return `http://${mcpDaemonHost(options)}:${mcpDaemonPort(options)}/mcp`;
 }
 
 function isToolName(value: string): value is ToolName {

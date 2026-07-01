@@ -2,7 +2,14 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createDoctorReport, listMcpTools, callMcpTool, mcpDaemonStatus } from "../src/mcp.js";
+import {
+  createDoctorReport,
+  listMcpTools,
+  callMcpTool,
+  mcpDaemonStatus,
+  installMcpDaemon,
+  mcpDaemonProxy
+} from "../src/mcp.js";
 import { loadServiceConfig } from "../src/service-context.js";
 
 function writeCredentials(home: string): void {
@@ -118,6 +125,65 @@ describe("mcp commands", () => {
     });
     expect(calls).toEqual([
       { command: "direxio-mcp", args: ["daemon", "status", "--service-name", "im", "--json"] }
+    ]);
+  });
+
+  it("installs the mcp package and service-scoped daemon", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-mcp-"));
+    writeCredentials(home);
+    const config = loadServiceConfig({ homeDir: home, service: "im.example.com" });
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await expect(
+      installMcpDaemon(config, {
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+      })
+    ).resolves.toEqual({
+      ok: true,
+      service_id: "im.example.com",
+      package: "direxio-mcp@latest",
+      daemon_url: "http://127.0.0.1:19757/mcp"
+    });
+
+    expect(calls).toEqual([
+      { command: "npm", args: ["install", "-g", "direxio-mcp@latest"] },
+      {
+        command: "direxio-mcp",
+        args: [
+          "daemon",
+          "install",
+          "--service-name",
+          "im.example.com",
+          "--credentials-file",
+          join(home, ".direxio", "nodes", "im.example.com", "credentials.json"),
+          "--node-id",
+          "codex-im",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "19757"
+        ]
+      }
+    ]);
+  });
+
+  it("runs the stdio proxy against the local mcp daemon URL", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await expect(
+      mcpDaemonProxy({
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          return { stdout: "proxy exited\n", stderr: "", exitCode: 0 };
+        }
+      })
+    ).resolves.toEqual({ stdout: "proxy exited\n", stderr: "", exitCode: 0 });
+
+    expect(calls).toEqual([
+      { command: "direxio-mcp", args: ["proxy", "--url", "http://127.0.0.1:19757/mcp"] }
     ]);
   });
 });

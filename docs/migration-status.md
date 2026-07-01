@@ -21,6 +21,11 @@ This file records verified migration progress. A module is marked complete only 
 - MCP daemon status slice:
   - `direxio mcp status --service <service_id> --json`
   - command invokes `direxio-mcp daemon status --service-name <service_id> --json` and fails if the underlying command fails.
+- MCP daemon install/proxy slice:
+  - `direxio mcp install --service <service_id> --json`
+  - command runs `npm install -g direxio-mcp@latest`, then `direxio-mcp daemon install --service-name <service_id> --credentials-file <credentials.json> --host 127.0.0.1 --port 19757`.
+  - `direxio mcp proxy` runs `direxio-mcp proxy --url http://127.0.0.1:19757/mcp`; direct CLI execution uses inherited stdio for MCP clients.
+  - `direxio mcp install --target <runtime>` is still blocked with a non-zero status because host snippet generation is not migrated yet.
 - Connect daemon management slice:
   - `direxio connect status --service <service_id> --json`
   - `direxio connect logs --service <service_id> -n <lines>`
@@ -46,7 +51,7 @@ These modules are not migrated and must not be reported as complete:
 - `direxio verify runtime`
 - `direxio confirm app-initialization`
 - `direxio connect install`
-- `direxio mcp install/proxy`
+- `direxio mcp install --target <runtime>`
 - `direxio skill install/update/refresh`
 - compatibility wrappers for existing shell and PowerShell entrypoints
 

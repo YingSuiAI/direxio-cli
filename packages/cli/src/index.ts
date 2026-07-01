@@ -1,6 +1,15 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import { connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
-import { callMcpTool, createDoctorReport, listMcpTools, mcpDaemonStatus } from "./mcp.js";
+import {
+  callMcpTool,
+  createDoctorReport,
+  installMcpDaemon,
+  listMcpTools,
+  mcpDaemonProxy,
+  mcpDaemonStatus,
+  mcpProxyCommand
+} from "./mcp.js";
 import { loadServiceConfig, resolveServiceContext, writeActiveService } from "./service-context.js";
 
 export interface CliRuntime {
@@ -83,6 +92,23 @@ async function runMcp(argv: string[], runtime: CliRuntime, stdout: (line: string
     printValue(await mcpDaemonStatus(serviceId, { runner: runtime.runner }), rest.includes("--json"), stdout);
     return 0;
   }
+  if (action === "install") {
+    if (rest.includes("--target")) {
+      throw new Error("mcp install --target migration is planned but not implemented in this slice");
+    }
+    const config = loadServiceConfig({ homeDir: runtime.homeDir, service });
+    printValue(await installMcpDaemon(config, { runner: runtime.runner }), rest.includes("--json"), stdout);
+    return 0;
+  }
+  if (action === "proxy") {
+    if (runtime.runner) {
+      const result = await mcpDaemonProxy({ runner: runtime.runner });
+      if (result.stdout) stdout(result.stdout);
+      return 0;
+    }
+    const proxy = mcpProxyCommand();
+    return runInheritedProcess(proxy.command, proxy.args);
+  }
   if (action === "call") {
     const toolName = rest[0];
     if (!toolName) throw new Error("mcp call requires <tool-name>");
@@ -92,9 +118,6 @@ async function runMcp(argv: string[], runtime: CliRuntime, stdout: (line: string
     const result = await callMcpTool(config, toolName, input, runtime.fetch ?? fetch);
     printValue(result, true, stdout);
     return 0;
-  }
-  if (["install", "proxy"].includes(action ?? "")) {
-    throw new Error(`mcp ${action} migration is planned but not implemented in this slice`);
   }
   throw new Error("mcp requires doctor, tools, call, install, status, or proxy");
 }
@@ -126,6 +149,21 @@ function usage(): string {
   direxio mcp <doctor|tools|call|install|status|proxy>
   direxio skill <install|update|refresh>
   direxio use <service-id>`;
+}
+
+function runInheritedProcess(command: string, args: string[]): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      shell: process.platform === "win32",
+      stdio: "inherit",
+      windowsHide: true
+    });
+    child.on("close", (code) => resolve(code ?? 1));
+    child.on("error", (error) => {
+      console.error(error.message);
+      resolve(1);
+    });
+  });
 }
 
 function isDirectRun(): boolean {
