@@ -1,9 +1,28 @@
 {
   "name": "@direxio/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Unified Direxio deployment, connect, MCP, and skill CLI.",
   "type": "module",
   "bin": {
     "direxio": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Adam0120/direxio-cli.git"
+  },
+  "homepage": "https://github.com/Adam0120/direxio-cli#readme",
+  "bugs": {
+    "url": "https://github.com/Adam0120/direxio-cli/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
