@@ -12,6 +12,7 @@ import {
 } from "./mcp.js";
 import { loadServiceConfig, resolveServiceContext, writeActiveService } from "./service-context.js";
 import { buildStatusReport, confirmUserGate } from "./state.js";
+import { verifyRuntime } from "./verify.js";
 
 export interface CliRuntime {
   homeDir?: string;
@@ -51,7 +52,10 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     if (command === "confirm") {
       return runConfirm(rest, runtime, stdout);
     }
-    if (["deploy", "destroy", "update", "reset-app-data", "verify", "skill"].includes(command)) {
+    if (command === "verify") {
+      return await runVerify(rest, runtime, stdout);
+    }
+    if (["deploy", "destroy", "update", "reset-app-data", "skill"].includes(command)) {
       stderr(`${command} migration is planned but not implemented in this slice`);
       return 2;
     }
@@ -69,6 +73,16 @@ function runConfirm(argv: string[], runtime: CliRuntime, stdout: (line: string) 
   const evidence = optionValue(rest, "--evidence") ?? process.env.DIREXIO_CONFIRM_EVIDENCE ?? "";
   const runtimeProbeConfirmed = rest.includes("--runtime-probe") || process.env.DIREXIO_CONFIRM_RUNTIME_PROBE === "1";
   printValue(confirmUserGate(context, gate, evidence, { runtimeProbeConfirmed }), rest.includes("--json"), stdout);
+  return 0;
+}
+
+async function runVerify(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {
+  const [target, ...rest] = argv;
+  if (target !== "runtime") {
+    throw new Error("verify requires runtime");
+  }
+  const context = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") });
+  printValue(await verifyRuntime(context, { runner: runtime.runner, fetch: runtime.fetch }), rest.includes("--json"), stdout);
   return 0;
 }
 

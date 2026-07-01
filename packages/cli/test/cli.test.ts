@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runCli } from "../src/index.js";
 
@@ -317,6 +317,63 @@ describe("direxio CLI", () => {
           evidence: "user finished app initialization with the current code"
         }
       }
+    });
+  });
+
+  it("routes verify runtime through runtime verification checks", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    const serviceDir = join(home, ".direxio", "nodes", "im.example.com");
+    const connectDir = join(serviceDir, "direxio-connect");
+    mkdirSync(connectDir, { recursive: true });
+    const credentialsFile = join(serviceDir, "credentials.json");
+    writeFileSync(
+      credentialsFile,
+      JSON.stringify({
+        profiles: {
+          default: {
+            direxio_domain: "https://im.example.com",
+            direxio_agent_token: "agent-secret",
+            direxio_agent_room_id: "!agents:im.example.com"
+          }
+        }
+      }),
+      "utf8"
+    );
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        domain: "im.example.com",
+        agent_service_id: "im.example.com",
+        agent_service_dir: serviceDir,
+        agent_credentials_file: credentialsFile,
+        connect_config: join(connectDir, "config.toml"),
+        connect_install_status: "installed"
+      }),
+      "utf8"
+    );
+    writeFileSync(join(connectDir, "config.toml"), "config = true\n", "utf8");
+    const stdout: string[] = [];
+
+    const code = await runCli(["verify", "runtime", "--service", "im.example.com", "--json"], {
+      homeDir: home,
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async (_command, args) => {
+        if (args[1] === "status") {
+          return { stdout: `Status: Running\nWorkDir: ${dirname(join(connectDir, "config.toml"))}\n`, stderr: "", exitCode: 0 };
+        }
+        if (args[1] === "logs") {
+          return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      fetch: async () => new Response(JSON.stringify({ room_id: "!agents:im.example.com", messages: [] }), { status: 200 })
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      status: "passed",
+      failed_count: 0
     });
   });
 });

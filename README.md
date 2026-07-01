@@ -17,6 +17,7 @@ direxio mcp status --service <service-id>
 direxio mcp doctor
 direxio mcp proxy
 direxio mcp call list_messages --json '{"limit":20}'
+direxio verify runtime --service <service-id>
 direxio confirm app-initialization --service <service-id> --evidence "user completed initialization"
 direxio skill install --agent codex
 ```

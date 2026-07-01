@@ -36,6 +36,10 @@ export function resolveServiceContext(input: ServiceContextInput = {}): ServiceC
 
 export function loadServiceConfig(input: ServiceContextInput = {}): ServiceConfig {
   const context = resolveServiceContext(input);
+  return loadServiceConfigFromContext(context);
+}
+
+export function loadServiceConfigFromContext(context: ServiceContext): ServiceConfig {
   if (!existsSync(context.credentialsFile)) {
     throw new Error(`credentials file not found for service ${context.serviceId}: ${context.credentialsFile}`);
   }
