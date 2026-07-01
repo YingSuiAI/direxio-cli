@@ -162,6 +162,10 @@ describe("deploy operation", () => {
     expect(description).not.toMatch(/\s/);
     const runInstances = calls.find((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "ec2" && normalizedAwsArgs(call.args)[1] === "run-instances");
     expect(runInstances?.args).toContain("ami-ubuntu-real");
+    expect(runInstances?.args).toContain("--count");
+    expect(runInstances?.args).toContain("1");
+    expect(runInstances?.args).not.toContain("--min-count");
+    expect(runInstances?.args).not.toContain("--max-count");
     const userDataArg = runInstances?.args[runInstances.args.indexOf("--user-data") + 1] ?? "";
     expect(userDataArg).toMatch(/^file:\/\//);
     const userData = readFileSync(userDataArg.replace(/^file:\/\//, ""), "utf8");

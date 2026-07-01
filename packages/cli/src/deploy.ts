@@ -229,9 +229,7 @@ async function provisionAwsResources(options: DeployOptions, state: ServiceState
       sgId,
       "--user-data",
       `file://${state.resources.user_data}`,
-      "--min-count",
-      "1",
-      "--max-count",
+      "--count",
       "1"
     ])).stdout);
     const createdInstance = instance.Instances?.[0] ?? {};
