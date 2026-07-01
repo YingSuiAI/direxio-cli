@@ -7,7 +7,7 @@ Unified local product surface for deploying Direxio, wiring the Matrix agent bri
 `direxio` is the single command users and agent skills should call:
 
 ```bash
-direxio deploy
+direxio deploy --service <service-id> --domain <domain> --region <aws-region> --confirm-domain
 direxio status --service <service-id>
 direxio update --service <service-id>
 direxio reset-app-data --service <service-id> --confirm

@@ -491,4 +491,55 @@ describe("direxio CLI", () => {
     });
     expect(readFileSync(join(home, ".codex", "skills", "direxio", "SKILL.md"), "utf8")).toContain("direxio mcp");
   });
+
+  it("routes deploy through the deployment state machine", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    const stdout: string[] = [];
+
+    const code = await runCli(
+      [
+        "deploy",
+        "--service",
+        "deploy.example.test",
+        "--domain",
+        "deploy.example.test",
+        "--region",
+        "ap-northeast-1",
+        "--confirm-domain",
+        "--json"
+      ],
+      {
+        homeDir: home,
+        stdout: (line) => stdout.push(line),
+        stderr: () => {},
+        runner: async (command, args) => {
+          const awsArgs = command === "aws" && args[0] === "--region" ? args.slice(2) : args;
+          if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "ssm") return { stdout: '{"Parameters":[{"Value":"ami-cli"}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-security-group") return { stdout: '{"GroupId":"sg-cli"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-key-pair") return { stdout: '{"KeyName":"direxio-cli","KeyMaterial":"PRIVATE"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "run-instances") return { stdout: '{"Instances":[{"InstanceId":"i-cli","BlockDeviceMappings":[{"Ebs":{"VolumeId":"vol-cli"}}]}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "allocate-address") return { stdout: '{"AllocationId":"eipalloc-cli","PublicIp":"203.0.113.43"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-hosted-zone") return { stdout: '{"HostedZone":{"Id":"/hostedzone/ZCLI"}}', stderr: "", exitCode: 0 };
+          if (command === "ssh") return { stdout: '{"password":"12345678","access_token":"owner","agent_token":"agent","agent_room_id":"!agents:deploy.example.test"}', stderr: "", exitCode: 0 };
+          if (command === "direxio-connect" && args[1] === "status") return { stdout: `Status: Running\nWorkDir: ${join(home, ".direxio", "nodes", "deploy.example.test", "direxio-connect")}\n`, stderr: "", exitCode: 0 };
+          if (command === "direxio-connect" && args[1] === "logs") return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+        fetch: async () => new Response(JSON.stringify({
+          access_token: "matrix",
+          device_id: "DEV",
+          user_id: "@agent:deploy.example.test",
+          homeserver: "https://deploy.example.test"
+        }), { status: 200 })
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      ok: true,
+      service_id: "deploy.example.test",
+      domain: "deploy.example.test"
+    });
+  });
 });

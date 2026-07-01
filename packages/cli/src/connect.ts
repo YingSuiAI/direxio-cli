@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ServiceContext } from "./service-context.js";
 
@@ -41,6 +41,29 @@ export interface ConnectInstallReport {
   package: string;
   config: string;
   readiness: string;
+}
+
+export interface ConnectConfigInput {
+  configFile: string;
+  dataDir: string;
+  project: string;
+  agent: string;
+  workspace: string;
+  homeserver: string;
+  matrixToken: string;
+  matrixUser: string;
+  roomId: string;
+  adminFrom?: string;
+  agentCmd?: string;
+  agentOptionsToml?: string;
+  speech?: {
+    enabled?: boolean;
+    provider?: string;
+    language?: string;
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+  };
 }
 
 const agentErrorPattern =
@@ -92,6 +115,51 @@ export async function connectInstall(
     config: configFile,
     readiness
   };
+}
+
+export function writeConnectConfig(input: ConnectConfigInput): void {
+  mkdirSync(dirnamePortable(input.configFile), { recursive: true });
+  mkdirSync(input.dataDir, { recursive: true });
+
+  const agentOptionsToml = input.agentOptionsToml?.trim() ?? "";
+  const defaultAgentOptionsToml = defaultAgentOptions(input.agent, agentOptionsToml);
+  const lines = [
+    'language = "zh"',
+    `data_dir = "${tomlEscape(input.dataDir)}"`
+  ];
+  const speechToml = speechConfigToml(input.speech);
+  if (speechToml) lines.push("", speechToml);
+  lines.push(
+    "",
+    "[[projects]]",
+    `name = "${tomlEscape(input.project)}"`,
+    `admin_from = "${tomlEscape(input.adminFrom ?? "")}"`,
+    "",
+    "[projects.agent]",
+    `type = "${tomlEscape(input.agent)}"`,
+    "",
+    "[projects.agent.options]",
+    `work_dir = "${tomlEscape(input.workspace)}"`
+  );
+  if (input.agentCmd) lines.push(`cmd = "${tomlEscape(input.agentCmd)}"`);
+  if (defaultAgentOptionsToml) lines.push(defaultAgentOptionsToml);
+  if (agentOptionsToml) lines.push(agentOptionsToml);
+  lines.push(
+    "",
+    "[[projects.platforms]]",
+    'type = "matrix"',
+    "",
+    "[projects.platforms.options]",
+    `homeserver = "${tomlEscape(input.homeserver)}"`,
+    `access_token = "${tomlEscape(input.matrixToken)}"`,
+    `user_id = "${tomlEscape(input.matrixUser)}"`,
+    `room_id = "${tomlEscape(input.roomId)}"`,
+    "share_session_in_channel = true",
+    "group_reply_all = true",
+    "auto_join = false",
+    "auto_verify = false"
+  );
+  writeFileSync(input.configFile, `${lines.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
 export const defaultRunner: CommandRunner = (command, args) => {
@@ -203,4 +271,44 @@ function sleep(ms: number): Promise<void> {
 function parseField(text: string, field: string): string {
   const pattern = new RegExp(`^\\s*${field}:\\s*(.+?)\\s*$`, "im");
   return pattern.exec(text)?.[1]?.trim() ?? "";
+}
+
+function defaultAgentOptions(agent: string, explicitToml: string): string {
+  if (agent !== "codex") return "";
+  const lines = [];
+  if (!tomlHasKey(explicitToml, "backend")) lines.push('backend = "app_server"');
+  if (!tomlHasKey(explicitToml, "app_server_url")) lines.push('app_server_url = "stdio"');
+  if (!tomlHasKey(explicitToml, "mode")) lines.push('mode = "yolo"');
+  return lines.join("\n");
+}
+
+function speechConfigToml(speech?: ConnectConfigInput["speech"]): string {
+  if (!speech?.enabled && !speech?.apiKey) return "";
+  const lines = [
+    "[speech]",
+    "enabled = true",
+    `provider = "${tomlEscape(speech.provider ?? "openai")}"`,
+    `language = "${tomlEscape(speech.language ?? "zh")}"`
+  ];
+  if (speech.apiKey || speech.baseUrl || speech.model) {
+    lines.push("", "[speech.openai]");
+    if (speech.apiKey) lines.push(`api_key = "${tomlEscape(speech.apiKey)}"`);
+    if (speech.baseUrl) lines.push(`base_url = "${tomlEscape(speech.baseUrl)}"`);
+    if (speech.model) lines.push(`model = "${tomlEscape(speech.model)}"`);
+  }
+  return lines.join("\n");
+}
+
+function tomlHasKey(toml: string, key: string): boolean {
+  return new RegExp(`^\\s*${key}\\s*=`, "m").test(toml);
+}
+
+function tomlEscape(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function dirnamePortable(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  return index >= 0 ? path.slice(0, index) : ".";
 }

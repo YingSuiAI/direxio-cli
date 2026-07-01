@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
+import { deployService } from "./deploy.js";
 import { destroyService } from "./destroy.js";
 import { installMcpTarget } from "./mcp-config.js";
 import {
@@ -81,9 +82,24 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     if (command === "skill") {
       return runSkill(rest, runtime, stdout);
     }
-    if (["deploy"].includes(command)) {
-      stderr(`${command} migration is planned but not implemented in this slice`);
-      return 2;
+    if (command === "deploy") {
+      printValue(
+        await deployService({
+          homeDir: runtime.homeDir,
+          serviceId: optionValue(rest, "--service") ?? optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
+          domain: optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
+          region: optionValue(rest, "--region") ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "",
+          agent: optionValue(rest, "--agent") ?? process.env.DIREXIO_CONNECT_AGENT ?? "codex",
+          mcpTarget: optionValue(rest, "--mcp-target") ?? optionValue(rest, "--target") ?? "codex",
+          workspace: optionValue(rest, "--workspace"),
+          confirmDomainBinding: rest.includes("--confirm-domain") || process.env.CONFIRM_DOMAIN_BINDING === "1",
+          runner: runtime.runner,
+          fetch: runtime.fetch
+        }),
+        rest.includes("--json"),
+        stdout
+      );
+      return 0;
     }
     throw new Error(`unknown command: ${command}`);
   } catch (error) {

@@ -36,6 +36,13 @@ This file records verified migration progress. A module is marked complete only 
   - `scripts/orchestrate.sh` and `scripts/orchestrate.ps1` forward to `direxio deploy` by default or pass explicit arguments through to `direxio`.
   - `scripts/destroy.sh` and `scripts/destroy.ps1` forward to `direxio destroy`.
   - wrappers do not contain deployment logic; the product implementation lives in the TypeScript CLI.
+- Deploy and local wiring slice:
+  - `direxio deploy --service <service_id> --domain <domain> --region <aws-region> --confirm-domain --json`
+  - deploy validates confirmed production-domain intent, creates or resumes service-scoped state under `~/.direxio/nodes/<service_id>/`, resolves the Ubuntu 22.04 AMI through AWS SSM, creates EC2/security-group/key-pair/EIP resources, finds the best matching parent Route53 hosted zone before falling back to creating a service zone, writes cloud-init user-data, waits for `https://<domain>/healthz`, pulls bootstrap credentials over SSH, creates an agent Matrix session through `agent.matrix_session.create`, writes `credentials.json`, generates `direxio-connect/config.toml`, installs the service-scoped `direxio-connect` daemon, installs `direxio-mcp`, and writes MCP target snippets.
+  - resume skips already recorded AWS resources to avoid duplicate security groups, key pairs, EC2 instances, EIPs, or hosted zones, while still refreshing health/bootstrap/local wiring.
+  - state records billing warnings for EC2/EBS/public IPv4/Elastic IP/Route53 resources.
+  - cloud-init starts the migrated production stack: PostgreSQL 18, Direxio message-server, Caddy, and coturn with TURN ports `3478` tcp/udp plus `49160-49200` udp.
+  - S6 connect config generation uses the Matrix `@agent:<server>` session token and restricts the Matrix platform to the real `agent_room_id`; MCP snippets call `direxio mcp proxy --service <service_id>`.
 - MCP direct CLI slice:
   - `direxio mcp doctor --service <service_id> --json`
   - `direxio mcp tools --json`
@@ -67,11 +74,7 @@ npm test
 npm run typecheck
 ```
 
-## Not Complete Yet
+## Remaining Follow-Up
 
-These modules are not migrated and must not be reported as complete:
-
-- `direxio deploy`
-- connect config generation during deploy/S6 wiring
-
-Current unimplemented command paths exit with a non-zero status and explicit "planned but not implemented" messaging. That is intentional until each module is migrated with local tests.
+- Replace shell compatibility wrappers in downstream packaging only after consumers install the `direxio` package directly.
+- Exercise one real cloud deployment before publishing a release; local tests cover command contracts and generated artifacts but do not create AWS resources.

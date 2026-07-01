@@ -1,8 +1,15 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "../src/connect.js";
+import {
+  connectInstall,
+  connectLogs,
+  connectRestart,
+  connectStatus,
+  writeConnectConfig,
+  type CommandRunner
+} from "../src/connect.js";
 
 function fakeRunner(result: { stdout?: string; stderr?: string; exitCode?: number } = {}): {
   runner: CommandRunner;
@@ -126,5 +133,64 @@ describe("connect runtime", () => {
         }
       )
     ).rejects.toThrow("local agent backend failure: Authentication required");
+  });
+
+  it("writes a service-scoped direxio-connect Matrix config", () => {
+    const serviceDir = mkdtempSync(join(tmpdir(), "direxio-cli-connect-"));
+    const configFile = join(serviceDir, "direxio-connect", "config.toml");
+
+    writeConnectConfig({
+      configFile,
+      dataDir: join(serviceDir, "direxio-connect", "data"),
+      project: "codex-node",
+      agent: "codex",
+      workspace: join(serviceDir, "workspace"),
+      homeserver: "https://service.example.test",
+      matrixToken: "matrix-token",
+      matrixUser: "@agent:service.example.test",
+      roomId: "!agents-real:service.example.test",
+      adminFrom: "@owner:service.example.test"
+    });
+
+    const config = readFileSync(configFile, "utf8");
+    expect(config).toContain('language = "zh"');
+    expect(config).toContain('type = "codex"');
+    expect(config).toContain('admin_from = "@owner:service.example.test"');
+    expect(config).toContain('backend = "app_server"');
+    expect(config).toContain('app_server_url = "stdio"');
+    expect(config).toContain('mode = "yolo"');
+    expect(config).toContain('type = "matrix"');
+    expect(config).toContain('homeserver = "https://service.example.test"');
+    expect(config).toContain('access_token = "matrix-token"');
+    expect(config).toContain('user_id = "@agent:service.example.test"');
+    expect(config).toContain('room_id = "!agents-real:service.example.test"');
+    expect(config).toContain("share_session_in_channel = true");
+    expect(config).not.toContain("DIREXIO_CREDENTIALS_FILE");
+  });
+
+  it("lets explicit agent options override codex defaults", () => {
+    const serviceDir = mkdtempSync(join(tmpdir(), "direxio-cli-connect-"));
+    const configFile = join(serviceDir, "direxio-connect", "config.toml");
+
+    writeConnectConfig({
+      configFile,
+      dataDir: join(serviceDir, "direxio-connect", "data"),
+      project: "codex-node",
+      agent: "codex",
+      workspace: join(serviceDir, "workspace"),
+      homeserver: "https://service.example.test",
+      matrixToken: "matrix-token",
+      matrixUser: "@agent:service.example.test",
+      roomId: "!agents-real:service.example.test",
+      adminFrom: "@owner:service.example.test",
+      agentOptionsToml: 'mode = "full-auto"\nmodel = "gpt-5.5"'
+    });
+
+    const config = readFileSync(configFile, "utf8");
+    expect(config).toContain('backend = "app_server"');
+    expect(config).toContain('app_server_url = "stdio"');
+    expect(config).toContain('mode = "full-auto"');
+    expect(config).toContain('model = "gpt-5.5"');
+    expect(config.match(/^\s*mode\s*=/gm)).toHaveLength(1);
   });
 });
