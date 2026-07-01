@@ -32,6 +32,10 @@ This file records verified migration progress. A module is marked complete only 
   - `direxio skill update --agent <runtime> --json`
   - `direxio skill refresh --agent <runtime> --json`
   - writes a compact agent-facing `direxio` skill into the runtime's global skill directory and points agents at the unified CLI instead of legacy shell phase scripts.
+- Compatibility wrapper slice:
+  - `scripts/orchestrate.sh` and `scripts/orchestrate.ps1` forward to `direxio deploy` by default or pass explicit arguments through to `direxio`.
+  - `scripts/destroy.sh` and `scripts/destroy.ps1` forward to `direxio destroy`.
+  - wrappers do not contain deployment logic; the product implementation lives in the TypeScript CLI.
 - MCP direct CLI slice:
   - `direxio mcp doctor --service <service_id> --json`
   - `direxio mcp tools --json`
@@ -69,6 +73,5 @@ These modules are not migrated and must not be reported as complete:
 
 - `direxio deploy`
 - connect config generation during deploy/S6 wiring
-- compatibility wrappers for existing shell and PowerShell entrypoints
 
 Current unimplemented command paths exit with a non-zero status and explicit "planned but not implemented" messaging. That is intentional until each module is migrated with local tests.
