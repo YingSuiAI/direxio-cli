@@ -471,4 +471,24 @@ describe("direxio CLI", () => {
       operation: "destroy"
     });
   });
+
+  it("routes skill install for an agent", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    const stdout: string[] = [];
+
+    const code = await runCli(["skill", "install", "--agent", "codex", "--json"], {
+      homeDir: home,
+      stdout: (line) => stdout.push(line),
+      stderr: () => {}
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      ok: true,
+      action: "install",
+      agent: "codex",
+      path: join(home, ".codex", "skills", "direxio")
+    });
+    expect(readFileSync(join(home, ".codex", "skills", "direxio", "SKILL.md"), "utf8")).toContain("direxio mcp");
+  });
 });

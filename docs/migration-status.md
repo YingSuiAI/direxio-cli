@@ -27,6 +27,11 @@ This file records verified migration progress. A module is marked complete only 
   - update runs the migrated remote Docker Compose pull/up command over SSH and writes `operation-report.json` without clearing local confirmations or runtime checks.
   - reset requires explicit confirmation, runs the migrated remote data-reset command over SSH, stops only the matching service-scoped `direxio-connect` daemon, clears stale credentials/confirmations/runtime checks, and marks local wiring phases refresh-pending.
   - destroy stops only the matching service-scoped `direxio-connect` daemon, removes recorded EC2/EIP/security-group/key-pair/Route53 resources through AWS CLI commands, writes a redacted destroy report under `~/.direxio/reports/<service_id>/operation-report.json`, then removes the local service directory.
+- Skill installation slice:
+  - `direxio skill install --agent <runtime> --json`
+  - `direxio skill update --agent <runtime> --json`
+  - `direxio skill refresh --agent <runtime> --json`
+  - writes a compact agent-facing `direxio` skill into the runtime's global skill directory and points agents at the unified CLI instead of legacy shell phase scripts.
 - MCP direct CLI slice:
   - `direxio mcp doctor --service <service_id> --json`
   - `direxio mcp tools --json`
@@ -64,7 +69,6 @@ These modules are not migrated and must not be reported as complete:
 
 - `direxio deploy`
 - connect config generation during deploy/S6 wiring
-- `direxio skill install/update/refresh`
 - compatibility wrappers for existing shell and PowerShell entrypoints
 
 Current unimplemented command paths exit with a non-zero status and explicit "planned but not implemented" messaging. That is intentional until each module is migrated with local tests.

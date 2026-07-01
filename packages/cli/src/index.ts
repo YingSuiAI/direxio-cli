@@ -14,6 +14,7 @@ import {
 } from "./mcp.js";
 import { resetAppData, updateService } from "./ops.js";
 import { loadServiceConfig, resolveServiceContext, writeActiveService } from "./service-context.js";
+import { installSkill, type SkillAction } from "./skill.js";
 import { buildStatusReport, confirmUserGate } from "./state.js";
 import { verifyRuntime } from "./verify.js";
 
@@ -77,7 +78,10 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
       printValue(await destroyService(context, { runner: runtime.runner }), rest.includes("--json"), stdout);
       return 0;
     }
-    if (["deploy", "skill"].includes(command)) {
+    if (command === "skill") {
+      return runSkill(rest, runtime, stdout);
+    }
+    if (["deploy"].includes(command)) {
       stderr(`${command} migration is planned but not implemented in this slice`);
       return 2;
     }
@@ -86,6 +90,21 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     stderr(error instanceof Error ? error.message : String(error));
     return 1;
   }
+}
+
+function runSkill(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): number {
+  const [action, ...rest] = argv;
+  if (!isSkillAction(action)) {
+    throw new Error("skill requires install, update, or refresh");
+  }
+  const agent = optionValue(rest, "--agent");
+  if (!agent) throw new Error("skill requires --agent <runtime>");
+  printValue(installSkill({ agent, homeDir: runtime.homeDir, action }), rest.includes("--json"), stdout);
+  return 0;
+}
+
+function isSkillAction(value: string | undefined): value is SkillAction {
+  return value === "install" || value === "update" || value === "refresh";
 }
 
 function runConfirm(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): number {
