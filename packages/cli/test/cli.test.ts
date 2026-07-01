@@ -67,4 +67,32 @@ describe("direxio CLI", () => {
       raw: "Status: Running\nWorkDir: C:/Users/alice/.direxio/nodes/im/direxio-connect\n"
     });
   });
+
+  it("routes mcp status through the service-scoped daemon command", async () => {
+    const stdout: string[] = [];
+    const commands: Array<{ command: string; args: string[] }> = [];
+
+    const code = await runCli(["mcp", "status", "--service", "im", "--json"], {
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async (command, args) => {
+        commands.push({ command, args });
+        return {
+          stdout: JSON.stringify({ service_name: "direxio-mcp-im", status: "Stopped", url: "" }),
+          stderr: "",
+          exitCode: 0
+        };
+      }
+    });
+
+    expect(code).toBe(0);
+    expect(commands).toEqual([
+      { command: "direxio-mcp", args: ["daemon", "status", "--service-name", "im", "--json"] }
+    ]);
+    expect(JSON.parse(stdout.join("\n"))).toEqual({
+      service_name: "direxio-mcp-im",
+      status: "Stopped",
+      url: ""
+    });
+  });
 });

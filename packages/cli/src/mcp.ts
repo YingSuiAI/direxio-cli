@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import { defaultRunner, type CommandResult, type CommandRunner } from "./connect.js";
 import type { ServiceConfig } from "./service-context.js";
 
 export type JsonObject = Record<string, unknown>;
@@ -72,6 +73,11 @@ export interface DoctorReport {
   transport: "direxio-cli";
 }
 
+export interface McpRuntimeOptions {
+  runner?: CommandRunner;
+  binary?: string;
+}
+
 export function createDoctorReport(config: ServiceConfig): DoctorReport {
   return {
     ok: true,
@@ -116,6 +122,21 @@ export async function callMcpTool(
     throw new Error(`${action} failed with ${response.status}: ${message}`);
   }
   return payload;
+}
+
+export async function mcpDaemonStatus(serviceId: string, options: McpRuntimeOptions = {}): Promise<JsonObject> {
+  const result = await runMcpDaemon(options, ["daemon", "status", "--service-name", serviceId, "--json"]);
+  return parseJsonObject(result.stdout);
+}
+
+async function runMcpDaemon(options: McpRuntimeOptions, args: string[]): Promise<CommandResult> {
+  const runner = options.runner ?? defaultRunner;
+  const binary = options.binary ?? "direxio-mcp";
+  const result = await runner(binary, args);
+  if (result.exitCode !== 0) {
+    throw new Error((result.stderr || result.stdout || `direxio-mcp exited with ${result.exitCode}`).trim());
+  }
+  return result;
 }
 
 function isToolName(value: string): value is ToolName {

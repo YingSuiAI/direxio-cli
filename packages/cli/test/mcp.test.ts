@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createDoctorReport, listMcpTools, callMcpTool } from "../src/mcp.js";
+import { createDoctorReport, listMcpTools, callMcpTool, mcpDaemonStatus } from "../src/mcp.js";
 import { loadServiceConfig } from "../src/service-context.js";
 
 function writeCredentials(home: string): void {
@@ -91,5 +91,33 @@ describe("mcp commands", () => {
     await expect(
       callMcpTool(config, "send_message", { room_id: "!agents:im.example.com", msg: "hello" }, fetch)
     ).rejects.toThrow("send_message cannot target the service agent room");
+  });
+
+  it("reads service-scoped mcp daemon status", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await expect(
+      mcpDaemonStatus("im", {
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          return {
+            stdout: JSON.stringify({
+              service_name: "direxio-mcp-im",
+              status: "Running",
+              url: "http://127.0.0.1:19757/mcp"
+            }),
+            stderr: "",
+            exitCode: 0
+          };
+        }
+      })
+    ).resolves.toEqual({
+      service_name: "direxio-mcp-im",
+      status: "Running",
+      url: "http://127.0.0.1:19757/mcp"
+    });
+    expect(calls).toEqual([
+      { command: "direxio-mcp", args: ["daemon", "status", "--service-name", "im", "--json"] }
+    ]);
   });
 });

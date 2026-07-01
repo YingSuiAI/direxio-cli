@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
-import { callMcpTool, createDoctorReport, listMcpTools } from "./mcp.js";
+import { callMcpTool, createDoctorReport, listMcpTools, mcpDaemonStatus } from "./mcp.js";
 import { loadServiceConfig, resolveServiceContext, writeActiveService } from "./service-context.js";
 
 export interface CliRuntime {
@@ -78,6 +78,11 @@ async function runMcp(argv: string[], runtime: CliRuntime, stdout: (line: string
     printValue({ tools: listMcpTools() }, rest.includes("--json"), stdout);
     return 0;
   }
+  if (action === "status") {
+    const serviceId = resolveServiceContext({ homeDir: runtime.homeDir, service }).serviceId;
+    printValue(await mcpDaemonStatus(serviceId, { runner: runtime.runner }), rest.includes("--json"), stdout);
+    return 0;
+  }
   if (action === "call") {
     const toolName = rest[0];
     if (!toolName) throw new Error("mcp call requires <tool-name>");
@@ -88,7 +93,7 @@ async function runMcp(argv: string[], runtime: CliRuntime, stdout: (line: string
     printValue(result, true, stdout);
     return 0;
   }
-  if (["install", "status", "proxy"].includes(action ?? "")) {
+  if (["install", "proxy"].includes(action ?? "")) {
     throw new Error(`mcp ${action} migration is planned but not implemented in this slice`);
   }
   throw new Error("mcp requires doctor, tools, call, install, status, or proxy");
