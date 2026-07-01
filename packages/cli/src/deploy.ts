@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { renderCloudInitUserData } from "./cloud-init.js";
 import { connectInstall, defaultRunner, writeConnectConfig, type CommandResult, type CommandRunner } from "./connect.js";
 import { installMcpTarget } from "./mcp-config.js";
@@ -216,6 +217,7 @@ async function provisionAwsResources(options: DeployOptions, context: ServiceCon
     state.resources.key_file = join(state.agent_service_dir, `${key.KeyName}.pem`);
     if (typeof key.KeyMaterial === "string") {
       writeFileSync(String(state.resources.key_file), key.KeyMaterial, { encoding: "utf8", mode: 0o600 });
+      restrictPrivateFile(String(state.resources.key_file));
     }
     writeServiceState(context, state);
   }
@@ -528,6 +530,18 @@ function delay(ms: number): Promise<void> {
 function stringValue(value: unknown): string {
   if (value === null || typeof value === "undefined") return "";
   return String(value);
+}
+
+function restrictPrivateFile(file: string): void {
+  chmodSync(file, 0o600);
+  if (process.platform !== "win32") return;
+  const account = process.env.USERDOMAIN && process.env.USERNAME
+    ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`
+    : process.env.USERNAME ?? "";
+  if (!account) return;
+  spawnSync("icacls", [file, "/inheritance:r"], { windowsHide: true });
+  spawnSync("icacls", [file, "/grant:r", `${account}:R`], { windowsHide: true });
+  spawnSync("icacls", [file, "/remove:g", "Users", "Authenticated Users", "Everyone"], { windowsHide: true });
 }
 
 function normalizeDomainName(value: string): string {
