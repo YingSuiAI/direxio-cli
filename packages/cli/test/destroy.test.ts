@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { destroyService } from "../src/destroy.js";
 
@@ -148,5 +149,38 @@ describe("destroy operation", () => {
         }
       }
     });
+  });
+
+  const winIt = process.platform === "win32" ? it : it.skip;
+  winIt("removes a Windows service directory containing a read-only private key ACL", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-windows-acl-"));
+    const serviceDir = join(home, ".direxio", "nodes", "windows-acl.example.test");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        domain: "windows-acl.example.test",
+        agent_service_id: "windows-acl.example.test",
+        agent_service_dir: serviceDir,
+        resources: {}
+      }),
+      "utf8"
+    );
+    const privateKeyFile = join(serviceDir, "direxio-windows-acl.example.test.pem");
+    writeFileSync(privateKeyFile, "PRIVATE KEY\n", "utf8");
+
+    const account = `${process.env.USERDOMAIN}\\${process.env.USERNAME}`;
+    const aclResult = spawnSync("icacls.exe", [privateKeyFile, "/inheritance:r", "/grant:r", `${account}:R`], { stdio: "ignore" });
+    expect(aclResult.status).toBe(0);
+
+    await destroyService({
+      serviceId: "windows-acl.example.test",
+      serviceDir,
+      credentialsFile: join(serviceDir, "credentials.json")
+    }, {
+      runner: async () => ({ stdout: "", stderr: "", exitCode: 0 })
+    });
+
+    expect(existsSync(serviceDir)).toBe(false);
   });
 });

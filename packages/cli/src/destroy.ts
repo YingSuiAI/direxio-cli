@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, normalize } from "node:path";
 import { connectStatus, defaultRunner, type CommandResult, type CommandRunner } from "./connect.js";
@@ -175,13 +176,34 @@ function route53DeleteARecordBatch(domain: string, ip: string): string {
 function makeTreeWritable(target: string): void {
   try {
     const stat = statSync(target);
+    grantWindowsCurrentUserFullControl(target, stat.isDirectory());
     if (stat.isDirectory()) {
       for (const entry of readdirSync(target)) makeTreeWritable(join(target, entry));
     }
     chmodSync(target, 0o700);
+    grantWindowsCurrentUserFullControl(target, stat.isDirectory());
   } catch {
     return;
   }
+}
+
+function grantWindowsCurrentUserFullControl(target: string, isDirectory: boolean): void {
+  if (process.platform !== "win32") return;
+  for (const account of currentWindowsAccounts()) {
+    const permission = `${account}:${isDirectory ? "(OI)(CI)F" : "F"}`;
+    const result = spawnSync("icacls.exe", [target, "/grant:r", permission, "/C"], {
+      stdio: "ignore",
+      windowsHide: true
+    });
+    if (result.status === 0) return;
+  }
+}
+
+function currentWindowsAccounts(): string[] {
+  const username = process.env.USERNAME?.trim();
+  if (!username) return [];
+  const domain = process.env.USERDOMAIN?.trim();
+  return [...new Set([domain ? `${domain}\\${username}` : "", username].filter(Boolean))];
 }
 
 function writeRoute53DeleteBatch(state: ServiceState, domain: string, ip: string): string {
