@@ -104,7 +104,9 @@ export async function connectInstall(
   }
 
   const packageName = connectNpmPackage(options);
-  await runCommand(options, options.npmBinary ?? "npm", ["install", "-g", packageName]);
+  if (shouldInstallConnectPackage(options)) {
+    await runCommand(options, options.npmBinary ?? "npm", ["install", "-g", packageName]);
+  }
   await runConnect(options, ["daemon", "install", "--config", configFile, "--service-name", context.serviceId, "--force"]);
   const readiness = await waitUntilConnectReady(context.serviceId, options);
 
@@ -196,6 +198,24 @@ function resolveExecutable(command: string): string {
   if (lookup.status !== 0 || !lookup.stdout.trim()) return command;
   const candidates = lookup.stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   return candidates.find((candidate) => /\.(?:exe|cmd|bat|com)$/i.test(candidate)) ?? candidates[0] ?? command;
+}
+
+function shouldInstallConnectPackage(options: ConnectRuntimeOptions): boolean {
+  if (options.runner) return true;
+  if (process.env.DIREXIO_CONNECT_FORCE_NPM_INSTALL === "1") return true;
+  return !commandExists(options.binary ?? "direxio-connect");
+}
+
+function commandExists(command: string): boolean {
+  if (/[\\/]/.test(command)) return existsSync(command);
+  if (process.platform === "win32") {
+    return spawnSync("where.exe", [command], { windowsHide: true }).status === 0;
+  }
+  return spawnSync("sh", ["-lc", `command -v ${shellQuote(command)}`], { windowsHide: true }).status === 0;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 async function runConnect(options: ConnectRuntimeOptions, args: string[]): Promise<CommandResult> {
