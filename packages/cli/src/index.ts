@@ -11,6 +11,7 @@ import {
   mcpProxyCommand
 } from "./mcp.js";
 import { loadServiceConfig, resolveServiceContext, writeActiveService } from "./service-context.js";
+import { buildStatusReport, confirmUserGate } from "./state.js";
 
 export interface CliRuntime {
   homeDir?: string;
@@ -42,7 +43,15 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     if (command === "connect") {
       return await runConnect(rest, runtime, stdout);
     }
-    if (["deploy", "status", "destroy", "update", "reset-app-data", "verify", "confirm", "skill"].includes(command)) {
+    if (command === "status") {
+      const context = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") });
+      printValue(buildStatusReport(context), rest.includes("--json"), stdout);
+      return 0;
+    }
+    if (command === "confirm") {
+      return runConfirm(rest, runtime, stdout);
+    }
+    if (["deploy", "destroy", "update", "reset-app-data", "verify", "skill"].includes(command)) {
       stderr(`${command} migration is planned but not implemented in this slice`);
       return 2;
     }
@@ -51,6 +60,16 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     stderr(error instanceof Error ? error.message : String(error));
     return 1;
   }
+}
+
+function runConfirm(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): number {
+  const [gate, ...rest] = argv;
+  if (!gate) throw new Error("confirm requires <app-initialization|real-chat|agent-mcp-runtime>");
+  const context = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") });
+  const evidence = optionValue(rest, "--evidence") ?? process.env.DIREXIO_CONFIRM_EVIDENCE ?? "";
+  const runtimeProbeConfirmed = rest.includes("--runtime-probe") || process.env.DIREXIO_CONFIRM_RUNTIME_PROBE === "1";
+  printValue(confirmUserGate(context, gate, evidence, { runtimeProbeConfirmed }), rest.includes("--json"), stdout);
+  return 0;
 }
 
 async function runConnect(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {

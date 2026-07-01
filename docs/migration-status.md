@@ -11,6 +11,13 @@ This file records verified migration progress. A module is marked complete only 
   - `--service <service_id>` resolves credentials under `~/.direxio/nodes/<service_id>/credentials.json`.
   - deployer credential shape is loaded.
   - token values are used internally but not printed by doctor output.
+- State, status, and confirmation slice:
+  - `direxio status --service <service_id> --json`
+  - `direxio confirm app-initialization --service <service_id> --evidence <text> --json`
+  - `direxio confirm real-chat --service <service_id> --evidence <text> --json`
+  - `direxio confirm agent-mcp-runtime --service <service_id> --evidence <text> --runtime-probe --json`
+  - status uses the migrated operation-report model and redacts initialization codes, Matrix tokens, agent tokens, and AWS session secrets.
+  - confirmation writes `user_confirmations` into `state.json`; `agent-mcp-runtime` requires `runtime_checks.summary.status=passed` plus runtime probe confirmation.
 - MCP direct CLI slice:
   - `direxio mcp doctor --service <service_id> --json`
   - `direxio mcp tools --json`
@@ -46,12 +53,10 @@ npm run typecheck
 These modules are not migrated and must not be reported as complete:
 
 - `direxio deploy`
-- `direxio status`
 - `direxio destroy`
 - `direxio update`
 - `direxio reset-app-data`
 - `direxio verify runtime`
-- `direxio confirm app-initialization`
 - `direxio mcp install --target <runtime>`
 - connect config generation during deploy/S6 wiring
 - `direxio skill install/update/refresh`

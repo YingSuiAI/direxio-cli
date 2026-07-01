@@ -8,7 +8,7 @@ Unified local product surface for deploying Direxio, wiring the Matrix agent bri
 
 ```bash
 direxio deploy
-direxio status
+direxio status --service <service-id>
 direxio destroy
 direxio connect install --service <service-id>
 direxio connect status
@@ -17,6 +17,7 @@ direxio mcp status --service <service-id>
 direxio mcp doctor
 direxio mcp proxy
 direxio mcp call list_messages --json '{"limit":20}'
+direxio confirm app-initialization --service <service-id> --evidence "user completed initialization"
 direxio skill install --agent codex
 ```
 

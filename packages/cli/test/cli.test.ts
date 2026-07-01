@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -242,5 +242,81 @@ describe("direxio CLI", () => {
     expect(code).toBe(1);
     expect(commands).toEqual([]);
     expect(stderr.join("\n")).toContain("mcp install --target migration is planned");
+  });
+
+  it("prints redacted service status from state", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    const serviceDir = join(home, ".direxio", "nodes", "im.example.com");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        domain: "im.example.com",
+        password: "12345678",
+        access_token: "ACCESS_SECRET",
+        agent_token: "AGENT_SECRET",
+        phases: { S7_VERIFY_E2E: { status: "done" } },
+        runtime_checks: { summary: { status: "passed" } }
+      }),
+      "utf8"
+    );
+    const stdout: string[] = [];
+
+    const code = await runCli(["status", "--service", "im.example.com", "--json"], {
+      homeDir: home,
+      stdout: (line) => stdout.push(line),
+      stderr: () => {}
+    });
+
+    expect(code).toBe(0);
+    const output = stdout.join("\n");
+    expect(output).not.toContain("12345678");
+    expect(output).not.toContain("ACCESS_SECRET");
+    expect(output).not.toContain("AGENT_SECRET");
+    expect(JSON.parse(output)).toMatchObject({
+      operation_type: "status",
+      status: "status_report",
+      domain: "im.example.com",
+      security: { secrets_included: false }
+    });
+  });
+
+  it("confirms user gates with explicit evidence", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    const serviceDir = join(home, ".direxio", "nodes", "im.example.com");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(join(serviceDir, "state.json"), JSON.stringify({ domain: "im.example.com" }), "utf8");
+    const stdout: string[] = [];
+
+    const code = await runCli(
+      [
+        "confirm",
+        "app-initialization",
+        "--service",
+        "im.example.com",
+        "--evidence",
+        "user finished app initialization with the current code",
+        "--json"
+      ],
+      {
+        homeDir: home,
+        stdout: (line) => stdout.push(line),
+        stderr: () => {}
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      gate: "app_initialization",
+      status: "confirmed"
+    });
+    expect(JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"))).toMatchObject({
+      user_confirmations: {
+        app_initialization: {
+          status: "confirmed",
+          evidence: "user finished app initialization with the current code"
+        }
+      }
+    });
   });
 });
