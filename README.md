@@ -1,0 +1,27 @@
+# Direxio CLI
+
+Unified local product surface for deploying Direxio, wiring the Matrix agent bridge, exposing MCP tools, and installing agent-facing skills.
+
+## Product Shape
+
+`direxio` is the single command users and agent skills should call:
+
+```bash
+direxio deploy
+direxio status
+direxio destroy
+direxio connect status
+direxio mcp doctor
+direxio mcp call list_messages --json '{"limit":20}'
+direxio skill install --agent codex
+```
+
+Internally, the product keeps deep modules:
+
+- `packages/cli`: TypeScript orchestration CLI, deployment state, reports, paths, and skill commands.
+- `packages/connect-runtime`: Go `direxio-connect` runtime integration for Matrix bridge and local agent daemon management.
+- `packages/mcp-runtime`: TypeScript `direxio-mcp` runtime integration for MCP HTTP, stdio proxy, and direct CLI tool calls.
+
+## Direction
+
+The product is unified at the command and service-context level, not by forcing every runtime into one process or language. `direxio-connect` remains the long-running bridge runtime; `direxio-mcp` remains the MCP protocol runtime; `direxio` manages both.
