@@ -14,7 +14,7 @@ direxio reset-app-data --service <service-id> --confirm
 direxio destroy --service <service-id>
 direxio connect install --service <service-id>
 direxio connect status
-direxio mcp install --service <service-id>
+direxio mcp install --service <service-id> --target codex
 direxio mcp status --service <service-id>
 direxio mcp doctor
 direxio mcp proxy

@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
 import { destroyService } from "./destroy.js";
+import { installMcpTarget } from "./mcp-config.js";
 import {
   callMcpTool,
   createDoctorReport,
@@ -149,11 +150,12 @@ async function runMcp(argv: string[], runtime: CliRuntime, stdout: (line: string
     return 0;
   }
   if (action === "install") {
-    if (rest.includes("--target")) {
-      throw new Error("mcp install --target migration is planned but not implemented in this slice");
-    }
     const config = loadServiceConfig({ homeDir: runtime.homeDir, service });
-    printValue(await installMcpDaemon(config, { runner: runtime.runner }), rest.includes("--json"), stdout);
+    const target = optionValue(rest, "--target");
+    const result = target
+      ? await installMcpTarget(config, target, { runner: runtime.runner })
+      : await installMcpDaemon(config, { runner: runtime.runner });
+    printValue(result, rest.includes("--json"), stdout);
     return 0;
   }
   if (action === "proxy") {

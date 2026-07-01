@@ -223,25 +223,32 @@ describe("direxio CLI", () => {
     expect(stdout.join("\n")).toBe("proxy exited\n");
   });
 
-  it("does not treat mcp target snippet installation as migrated", async () => {
+  it("generates mcp target snippets during mcp install", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
     writeServiceCredentials(home, "im.example.com");
-    const stderr: string[] = [];
+    const stdout: string[] = [];
     const commands: Array<{ command: string; args: string[] }> = [];
 
-    const code = await runCli(["mcp", "install", "--service", "im.example.com", "--target", "codex"], {
+    const code = await runCli(["mcp", "install", "--service", "im.example.com", "--target", "codex", "--json"], {
       homeDir: home,
-      stdout: () => {},
-      stderr: (line) => stderr.push(line),
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
       runner: async (command, args) => {
         commands.push({ command, args });
         return { stdout: "", stderr: "", exitCode: 0 };
       }
     });
 
-    expect(code).toBe(1);
-    expect(commands).toEqual([]);
-    expect(stderr.join("\n")).toContain("mcp install --target migration is planned");
+    expect(code).toBe(0);
+    expect(commands[0]).toEqual({ command: "npm", args: ["install", "-g", "direxio-mcp@latest"] });
+    const codexToml = readFileSync(join(home, ".direxio", "nodes", "im.example.com", "mcp", "codex.toml"), "utf8");
+    expect(codexToml).toContain('command = "direxio"');
+    expect(codexToml).toContain('args = ["mcp", "proxy", "--service", "im.example.com"]');
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      ok: true,
+      service_id: "im.example.com",
+      target: "codex"
+    });
   });
 
   it("prints redacted service status from state", async () => {
