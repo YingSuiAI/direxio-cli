@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
+import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
 import {
   callMcpTool,
   createDoctorReport,
@@ -55,7 +55,12 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
 
 async function runConnect(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {
   const [action, ...rest] = argv;
-  const serviceId = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") }).serviceId;
+  const context = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") });
+  const serviceId = context.serviceId;
+  if (action === "install") {
+    printValue(await connectInstall(context, { runner: runtime.runner }), rest.includes("--json"), stdout);
+    return 0;
+  }
   if (action === "status") {
     printValue(await connectStatus(serviceId, { runner: runtime.runner }), rest.includes("--json"), stdout);
     return 0;
@@ -68,9 +73,6 @@ async function runConnect(argv: string[], runtime: CliRuntime, stdout: (line: st
   if (action === "restart") {
     printValue(await connectRestart(serviceId, { runner: runtime.runner }), rest.includes("--json"), stdout);
     return 0;
-  }
-  if (action === "install") {
-    throw new Error("connect install migration is planned but not implemented in this slice");
   }
   throw new Error("connect requires install, status, logs, or restart");
 }

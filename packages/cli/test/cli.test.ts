@@ -86,6 +86,50 @@ describe("direxio CLI", () => {
     });
   });
 
+  it("routes connect install through npm, daemon install, and readiness checks", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    const serviceDir = join(home, ".direxio", "nodes", "im");
+    const configFile = join(serviceDir, "direxio-connect", "config.toml");
+    mkdirSync(join(serviceDir, "direxio-connect"), { recursive: true });
+    writeFileSync(configFile, "config = true\n");
+    const stdout: string[] = [];
+    const commands: Array<{ command: string; args: string[] }> = [];
+
+    const code = await runCli(["connect", "install", "--service", "im", "--json"], {
+      homeDir: home,
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async (command, args) => {
+        commands.push({ command, args });
+        if (command === "direxio-connect" && args[1] === "status") {
+          return { stdout: "Status: Running\n", stderr: "", exitCode: 0 };
+        }
+        if (command === "direxio-connect" && args[1] === "logs") {
+          return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(code).toBe(0);
+    expect(commands).toEqual([
+      { command: "npm", args: ["install", "-g", "direxio-connent@latest"] },
+      {
+        command: "direxio-connect",
+        args: ["daemon", "install", "--config", configFile, "--service-name", "im", "--force"]
+      },
+      { command: "direxio-connect", args: ["daemon", "status", "--service-name", "im"] },
+      { command: "direxio-connect", args: ["daemon", "logs", "--service-name", "im", "-n", "120"] }
+    ]);
+    expect(JSON.parse(stdout.join("\n"))).toEqual({
+      ok: true,
+      service_id: "im",
+      package: "direxio-connent@latest",
+      config: configFile,
+      readiness: "direxio-connect is running"
+    });
+  });
+
   it("routes mcp status through the service-scoped daemon command", async () => {
     const stdout: string[] = [];
     const commands: Array<{ command: string; args: string[] }> = [];

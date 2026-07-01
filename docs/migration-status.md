@@ -27,9 +27,11 @@ This file records verified migration progress. A module is marked complete only 
   - `direxio mcp proxy` runs `direxio-mcp proxy --url http://127.0.0.1:19757/mcp`; direct CLI execution uses inherited stdio for MCP clients.
   - `direxio mcp install --target <runtime>` is still blocked with a non-zero status because host snippet generation is not migrated yet.
 - Connect daemon management slice:
+  - `direxio connect install --service <service_id> --json`
   - `direxio connect status --service <service_id> --json`
   - `direxio connect logs --service <service_id> -n <lines>`
   - `direxio connect restart --service <service_id> --json`
+  - install requires an existing `~/.direxio/nodes/<service_id>/direxio-connect/config.toml`, runs `npm install -g direxio-connent@latest`, installs the service-scoped daemon, and verifies startup through daemon status plus logs.
   - commands invoke `direxio-connect daemon ... --service-name <service_id>` and fail if the underlying command fails.
 
 Verified by:
@@ -50,8 +52,8 @@ These modules are not migrated and must not be reported as complete:
 - `direxio reset-app-data`
 - `direxio verify runtime`
 - `direxio confirm app-initialization`
-- `direxio connect install`
 - `direxio mcp install --target <runtime>`
+- connect config generation during deploy/S6 wiring
 - `direxio skill install/update/refresh`
 - compatibility wrappers for existing shell and PowerShell entrypoints
 

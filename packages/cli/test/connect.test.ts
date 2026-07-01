@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { connectLogs, connectRestart, connectStatus, type CommandRunner } from "../src/connect.js";
+import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "../src/connect.js";
 
 function fakeRunner(result: { stdout?: string; stderr?: string; exitCode?: number } = {}): {
   runner: CommandRunner;
@@ -56,5 +59,72 @@ describe("connect runtime", () => {
     expect(calls).toEqual([
       { command: "direxio-connect", args: ["daemon", "restart", "--service-name", "im"] }
     ]);
+  });
+
+  it("installs the package and verifies daemon readiness", async () => {
+    const serviceDir = mkdtempSync(join(tmpdir(), "direxio-cli-connect-"));
+    const configFile = join(serviceDir, "direxio-connect", "config.toml");
+    mkdirSync(join(serviceDir, "direxio-connect"), { recursive: true });
+    writeFileSync(configFile, "config = true\n");
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await expect(
+      connectInstall(
+        { serviceId: "im", serviceDir, credentialsFile: join(serviceDir, "credentials.json") },
+        {
+          runner: async (command, args) => {
+            calls.push({ command, args });
+            if (command === "direxio-connect" && args[1] === "status") {
+              return { stdout: "Status: Running\nWorkDir: service-dir\n", stderr: "", exitCode: 0 };
+            }
+            if (command === "direxio-connect" && args[1] === "logs") {
+              return { stdout: "config loaded\ninfo direxio-connect is running\n", stderr: "", exitCode: 0 };
+            }
+            return { stdout: "", stderr: "", exitCode: 0 };
+          }
+        }
+      )
+    ).resolves.toEqual({
+      ok: true,
+      service_id: "im",
+      package: "direxio-connent@latest",
+      config: configFile,
+      readiness: "direxio-connect is running"
+    });
+
+    expect(calls).toEqual([
+      { command: "npm", args: ["install", "-g", "direxio-connent@latest"] },
+      {
+        command: "direxio-connect",
+        args: ["daemon", "install", "--config", configFile, "--service-name", "im", "--force"]
+      },
+      { command: "direxio-connect", args: ["daemon", "status", "--service-name", "im"] },
+      { command: "direxio-connect", args: ["daemon", "logs", "--service-name", "im", "-n", "120"] }
+    ]);
+  });
+
+  it("fails install when daemon logs show local agent startup errors", async () => {
+    const serviceDir = mkdtempSync(join(tmpdir(), "direxio-cli-connect-"));
+    const configFile = join(serviceDir, "direxio-connect", "config.toml");
+    mkdirSync(join(serviceDir, "direxio-connect"), { recursive: true });
+    writeFileSync(configFile, "config = true\n");
+
+    await expect(
+      connectInstall(
+        { serviceId: "im", serviceDir, credentialsFile: join(serviceDir, "credentials.json") },
+        {
+          startupTimeoutMs: 0,
+          runner: async (command, args) => {
+            if (command === "direxio-connect" && args[1] === "status") {
+              return { stdout: "Status: Running\n", stderr: "", exitCode: 0 };
+            }
+            if (command === "direxio-connect" && args[1] === "logs") {
+              return { stdout: "Authentication required. Please run agent login first.\n", stderr: "", exitCode: 0 };
+            }
+            return { stdout: "", stderr: "", exitCode: 0 };
+          }
+        }
+      )
+    ).rejects.toThrow("local agent backend failure: Authentication required");
   });
 });

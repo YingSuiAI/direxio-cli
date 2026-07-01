@@ -10,6 +10,7 @@ Unified local product surface for deploying Direxio, wiring the Matrix agent bri
 direxio deploy
 direxio status
 direxio destroy
+direxio connect install --service <service-id>
 direxio connect status
 direxio mcp install --service <service-id>
 direxio mcp status --service <service-id>

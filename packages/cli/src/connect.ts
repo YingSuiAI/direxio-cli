@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import type { ServiceContext } from "./service-context.js";
 
 export interface CommandResult {
   stdout: string;
@@ -12,6 +15,11 @@ export interface ConnectRuntimeOptions {
   runner?: CommandRunner;
   binary?: string;
   lines?: number;
+  npmBinary?: string;
+  npmPackage?: string;
+  configFile?: string;
+  startupTimeoutMs?: number;
+  pollMs?: number;
 }
 
 export interface ConnectStatusReport {
@@ -26,6 +34,17 @@ export interface ConnectRestartReport {
   service_id: string;
   output: string;
 }
+
+export interface ConnectInstallReport {
+  ok: true;
+  service_id: string;
+  package: string;
+  config: string;
+  readiness: string;
+}
+
+const agentErrorPattern =
+  /ACP_SESSION_INIT_FAILED|ACP metadata is missing|Recreate this ACP session|failed to create agent|failed to create platform|run_as_user: startup checks failed|CLI not found in PATH|Authentication required|agent login|not logged in|login required|not authenticated|Workspace Trust Required|agent backend offline|agent is offline|agent[^"]*offline|offline[^"]*agent/i;
 
 export async function connectStatus(serviceId: string, options: ConnectRuntimeOptions = {}): Promise<ConnectStatusReport> {
   const result = await runConnect(options, ["daemon", "status", "--service-name", serviceId]);
@@ -49,6 +68,29 @@ export async function connectRestart(serviceId: string, options: ConnectRuntimeO
     ok: true,
     service_id: serviceId,
     output: result.stdout
+  };
+}
+
+export async function connectInstall(
+  context: ServiceContext,
+  options: ConnectRuntimeOptions = {}
+): Promise<ConnectInstallReport> {
+  const configFile = options.configFile ?? join(context.serviceDir, "direxio-connect", "config.toml");
+  if (!existsSync(configFile)) {
+    throw new Error(`direxio-connect config not found for service ${context.serviceId}: ${configFile}`);
+  }
+
+  const packageName = connectNpmPackage(options);
+  await runCommand(options, options.npmBinary ?? "npm", ["install", "-g", packageName]);
+  await runConnect(options, ["daemon", "install", "--config", configFile, "--service-name", context.serviceId, "--force"]);
+  const readiness = await waitUntilConnectReady(context.serviceId, options);
+
+  return {
+    ok: true,
+    service_id: context.serviceId,
+    package: packageName,
+    config: configFile,
+    readiness
   };
 }
 
@@ -80,13 +122,82 @@ export const defaultRunner: CommandRunner = (command, args) => {
 };
 
 async function runConnect(options: ConnectRuntimeOptions, args: string[]): Promise<CommandResult> {
+  return runCommand(options, options.binary ?? "direxio-connect", args);
+}
+
+async function runCommand(options: ConnectRuntimeOptions, command: string, args: string[]): Promise<CommandResult> {
   const runner = options.runner ?? defaultRunner;
-  const binary = options.binary ?? "direxio-connect";
-  const result = await runner(binary, args);
+  const result = await runner(command, args);
   if (result.exitCode !== 0) {
-    throw new Error((result.stderr || result.stdout || `direxio-connect exited with ${result.exitCode}`).trim());
+    throw new Error((result.stderr || result.stdout || `${command} exited with ${result.exitCode}`).trim());
   }
   return result;
+}
+
+async function waitUntilConnectReady(serviceId: string, options: ConnectRuntimeOptions): Promise<string> {
+  const timeoutMs = options.startupTimeoutMs ?? envSeconds("DIREXIO_CONNECT_STARTUP_TIMEOUT_SECONDS", 30) * 1000;
+  const pollMs = options.pollMs ?? Math.max(envSeconds("DIREXIO_CONNECT_STARTUP_POLL_SECONDS", 2) * 1000, 1);
+  let elapsed = 0;
+
+  while (true) {
+    const status = await connectStatus(serviceId, options);
+    if (status.status !== "Running") {
+      throw new Error("daemon status is not Running");
+    }
+
+    const logs = await connectLogs(serviceId, {
+      ...options,
+      lines: options.lines ?? envInteger("DIREXIO_CONNECT_LOG_TAIL_LINES", 120)
+    });
+    const agentError = connectDaemonAgentErrorFromText(logs);
+    if (agentError) {
+      throw new Error(`local agent backend failure: ${agentError}`);
+    }
+    const ready = connectDaemonReadyFromText(logs);
+    if (ready) return ready;
+
+    if (elapsed >= timeoutMs) {
+      throw new Error(`startup logs did not show 'direxio-connect is running' within ${Math.ceil(timeoutMs / 1000)}s`);
+    }
+    await sleep(pollMs);
+    elapsed += pollMs;
+  }
+}
+
+function connectDaemonAgentErrorFromText(text: string): string {
+  return agentErrorPattern.exec(recentConnectLogs(text))?.[0] ?? "";
+}
+
+function connectDaemonReadyFromText(text: string): string {
+  return /direxio-connect is running/i.exec(recentConnectLogs(text))?.[0] ?? "";
+}
+
+function recentConnectLogs(text: string): string {
+  let buffer = "";
+  for (const line of text.split(/\r?\n/)) {
+    if (/config loaded|direxio-connect is running|acquired instance lock/i.test(line)) {
+      buffer = "";
+    }
+    buffer += `${line}\n`;
+  }
+  return buffer;
+}
+
+function connectNpmPackage(options: ConnectRuntimeOptions): string {
+  return options.npmPackage ?? process.env.DIREXIO_CONNECT_NPM_PACKAGE ?? "direxio-connent@latest";
+}
+
+function envInteger(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function envSeconds(name: string, fallback: number): number {
+  return envInteger(name, fallback);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function parseField(text: string, field: string): string {
