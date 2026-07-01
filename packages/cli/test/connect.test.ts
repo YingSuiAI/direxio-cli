@@ -41,6 +41,13 @@ describe("connect runtime", () => {
     expect(result).toMatchObject({ exitCode: 0, stdout: "alpha || true" });
   });
 
+  it("can launch npm through the default runner on Windows", async () => {
+    const result = await defaultRunner("npm", ["--version"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
   it("reads daemon status for a service", async () => {
     const { runner, calls } = fakeRunner({
       stdout: "direxio-connect daemon status\n\n  Status:    Running\n  WorkDir:   C:/Users/alice/.direxio/nodes/im/direxio-connect\n"

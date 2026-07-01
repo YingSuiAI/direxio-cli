@@ -164,8 +164,9 @@ export function writeConnectConfig(input: ConnectConfigInput): void {
 
 export const defaultRunner: CommandRunner = (command, args) => {
   return new Promise((resolve) => {
-    const child = spawn(resolveExecutable(command), args, {
-      shell: false,
+    const executable = resolveExecutable(command);
+    const child = spawn(executable, args, {
+      shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(executable),
       windowsHide: true
     });
     const stdout: Buffer[] = [];
