@@ -269,7 +269,7 @@ async function createSecurityGroup(options: DeployOptions, domain: string): Prom
     "--group-name",
     `direxio-${domain}`,
     "--description",
-    `Direxio ${domain}`
+    `Direxio-${domain}`
   ])).stdout);
   const sgId = String(sg.GroupId);
   for (const rule of [

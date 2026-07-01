@@ -156,6 +156,10 @@ describe("deploy operation", () => {
     for (const call of calls.filter((item) => item.command === "aws")) {
       expect(call.args.slice(0, 2)).toEqual(["--region", "ap-northeast-1"]);
     }
+    const createSecurityGroup = calls.find((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "ec2" && normalizedAwsArgs(call.args)[1] === "create-security-group");
+    const description = createSecurityGroup?.args[(createSecurityGroup?.args.indexOf("--description") ?? -1) + 1] ?? "";
+    expect(description).toMatch(/^Direxio-/);
+    expect(description).not.toMatch(/\s/);
     const runInstances = calls.find((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "ec2" && normalizedAwsArgs(call.args)[1] === "run-instances");
     expect(runInstances?.args).toContain("ami-ubuntu-real");
     const userDataArg = runInstances?.args[runInstances.args.indexOf("--user-data") + 1] ?? "";
