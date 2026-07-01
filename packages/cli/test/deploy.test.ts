@@ -196,6 +196,9 @@ describe("deploy operation", () => {
       ]
     });
     expect(calls.some((call) => call.command === "ssh")).toBe(true);
+    const sshCall = calls.find((call) => call.command === "ssh");
+    expect(sshCall?.args.join(" ")).toContain("DOMAIN=deploy.example.test");
+    expect(sshCall?.args.join(" ")).not.toContain("'\\''deploy.example.test'\\''");
     expect(calls.some((call) => call.command === "direxio-connect" && call.args[1] === "install")).toBe(true);
     expect(calls.some((call) => call.command === "direxio-mcp" && call.args[1] === "install")).toBe(true);
   });

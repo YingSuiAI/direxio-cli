@@ -372,13 +372,14 @@ async function waitForHealthz(options: DeployOptions, domain: string): Promise<v
 }
 
 async function bootstrapRemote(options: DeployOptions, state: ServiceState, domain: string): Promise<BootstrapCredentials> {
-  const remoteScript = `sudo sh -lc '${[
+  const remoteBody = [
     "set -eu",
     "mkdir -p /var/direxio-message-server",
     "cd /var/direxio-message-server",
-    `DOMAIN=${shellQuote(domain)} bash /var/direxio-message-server/init-tokens.sh >/dev/null 2>&1 || true`,
+    `DOMAIN=${domain} bash /var/direxio-message-server/init-tokens.sh >/dev/null 2>&1 || true`,
     "cat /var/direxio-message-server/p2p/bootstrap.json"
-  ].join("\n").replace(/'/g, "'\\''")}'`;
+  ].join("; ");
+  const remoteScript = `sudo sh -lc ${shellQuote(remoteBody)}`;
   const result = await runCommand(options, "ssh", [
     "-i",
     String(state.resources.key_file),
