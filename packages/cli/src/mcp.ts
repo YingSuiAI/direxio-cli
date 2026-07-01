@@ -147,18 +147,7 @@ export async function installMcpDaemon(config: ServiceConfig, options: McpRuntim
   const packageName = mcpNpmPackage(options);
   await runCommand(options, options.npmBinary ?? "npm", ["install", "-g", packageName]);
 
-  const args = [
-    "daemon",
-    "install",
-    "--service-name",
-    config.serviceId,
-    "--credentials-file",
-    config.credentialsFile
-  ];
-  if (config.agentNodeId) {
-    args.push("--node-id", config.agentNodeId);
-  }
-  args.push("--host", mcpDaemonHost(options), "--port", mcpDaemonPort(options));
+  const args = mcpDaemonServiceArgs("install", config, options);
 
   const installResult = await tryMcpDaemon(options, args);
   let daemonInstallMode: McpInstallReport["daemon_install_mode"] = "service";
@@ -166,6 +155,10 @@ export async function installMcpDaemon(config: ServiceConfig, options: McpRuntim
     const message = (installResult.stderr || installResult.stdout).trim();
     if (!isWindowsTaskAccessDenied(message)) {
       throw new Error(message || `direxio-mcp exited with ${installResult.exitCode}`);
+    }
+    const metadataResult = await tryMcpDaemon(options, mcpDaemonServiceArgs("write-metadata", config, options));
+    if (metadataResult.exitCode !== 0) {
+      throw new Error((metadataResult.stderr || metadataResult.stdout || `direxio-mcp metadata exited with ${metadataResult.exitCode}`).trim());
     }
     startDetachedMcpDaemon(config, options);
     daemonInstallMode = "detached_process";
@@ -177,6 +170,22 @@ export async function installMcpDaemon(config: ServiceConfig, options: McpRuntim
     daemon_url: mcpDaemonUrl(options),
     ...(daemonInstallMode === "detached_process" ? { daemon_install_mode: daemonInstallMode } : {})
   };
+}
+
+function mcpDaemonServiceArgs(action: "install" | "write-metadata", config: ServiceConfig, options: McpRuntimeOptions): string[] {
+  const args = [
+    "daemon",
+    action,
+    "--service-name",
+    config.serviceId,
+    "--credentials-file",
+    config.credentialsFile
+  ];
+  if (config.agentNodeId) {
+    args.push("--node-id", config.agentNodeId);
+  }
+  args.push("--host", mcpDaemonHost(options), "--port", mcpDaemonPort(options));
+  return args;
 }
 
 export async function mcpDaemonProxy(options: McpRuntimeOptions = {}): Promise<CommandResult> {
@@ -225,16 +234,7 @@ function mcpDaemonUrl(options: McpRuntimeOptions): string {
 }
 
 function startDetachedMcpDaemon(config: ServiceConfig, options: McpRuntimeOptions): void {
-  const args = [
-    "daemon",
-    "run",
-    "--service-name",
-    config.serviceId,
-    "--credentials-file",
-    config.credentialsFile
-  ];
-  if (config.agentNodeId) args.push("--node-id", config.agentNodeId);
-  args.push("--host", mcpDaemonHost(options), "--port", mcpDaemonPort(options));
+  const args = ["daemon", "run", "--service-name", config.serviceId];
   const command = options.binary ?? "direxio-mcp";
   if (options.startDetached) {
     options.startDetached(command, args);

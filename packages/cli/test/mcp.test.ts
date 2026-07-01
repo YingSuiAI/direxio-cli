@@ -200,22 +200,26 @@ describe("mcp commands", () => {
     expect(detached).toEqual([
       {
         command: "direxio-mcp",
-        args: [
-          "daemon",
-          "run",
-          "--service-name",
-          "im.example.com",
-          "--credentials-file",
-          join(home, ".direxio", "nodes", "im.example.com", "credentials.json"),
-          "--node-id",
-          "codex-im",
-          "--host",
-          "127.0.0.1",
-          "--port",
-          "19757"
-        ]
+        args: ["daemon", "run", "--service-name", "im.example.com"]
       }
     ]);
+    expect(calls).toContainEqual({
+      command: "direxio-mcp",
+      args: [
+        "daemon",
+        "write-metadata",
+        "--service-name",
+        "im.example.com",
+        "--credentials-file",
+        join(home, ".direxio", "nodes", "im.example.com", "credentials.json"),
+        "--node-id",
+        "codex-im",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "19757"
+      ]
+    });
   });
 
   it("runs the stdio proxy against the local mcp daemon URL", async () => {
