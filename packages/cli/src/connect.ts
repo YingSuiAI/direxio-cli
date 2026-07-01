@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ServiceContext } from "./service-context.js";
@@ -164,8 +164,8 @@ export function writeConnectConfig(input: ConnectConfigInput): void {
 
 export const defaultRunner: CommandRunner = (command, args) => {
   return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      shell: process.platform === "win32",
+    const child = spawn(resolveExecutable(command), args, {
+      shell: false,
       windowsHide: true
     });
     const stdout: Buffer[] = [];
@@ -188,6 +188,14 @@ export const defaultRunner: CommandRunner = (command, args) => {
     });
   });
 };
+
+function resolveExecutable(command: string): string {
+  if (process.platform !== "win32" || /[\\/]/.test(command)) return command;
+  const lookup = spawnSync("where.exe", [command], { encoding: "utf8", windowsHide: true });
+  if (lookup.status !== 0 || !lookup.stdout.trim()) return command;
+  const candidates = lookup.stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return candidates.find((candidate) => /\.(?:exe|cmd|bat|com)$/i.test(candidate)) ?? candidates[0] ?? command;
+}
 
 async function runConnect(options: ConnectRuntimeOptions, args: string[]): Promise<CommandResult> {
   return runCommand(options, options.binary ?? "direxio-connect", args);

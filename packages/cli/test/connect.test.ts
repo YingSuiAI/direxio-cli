@@ -7,6 +7,7 @@ import {
   connectLogs,
   connectRestart,
   connectStatus,
+  defaultRunner,
   writeConnectConfig,
   type CommandRunner
 } from "../src/connect.js";
@@ -30,6 +31,16 @@ function fakeRunner(result: { stdout?: string; stderr?: string; exitCode?: numbe
 }
 
 describe("connect runtime", () => {
+  it("passes shell metacharacters as child process arguments", async () => {
+    const result = await defaultRunner(process.execPath, [
+      "-e",
+      "process.stdout.write(process.argv[1] ?? '')",
+      "alpha || true"
+    ]);
+
+    expect(result).toMatchObject({ exitCode: 0, stdout: "alpha || true" });
+  });
+
   it("reads daemon status for a service", async () => {
     const { runner, calls } = fakeRunner({
       stdout: "direxio-connect daemon status\n\n  Status:    Running\n  WorkDir:   C:/Users/alice/.direxio/nodes/im/direxio-connect\n"
