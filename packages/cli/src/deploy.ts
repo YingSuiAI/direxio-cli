@@ -107,9 +107,11 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
   const serviceConfig = serviceConfigFromDeploy(context, domain, bootstrap, String(state.agent_node_id));
   await connectInstall(context, { runner: options.runner });
   state.connect_install_status = "installed";
-  await installMcpTarget(serviceConfig, options.mcpTarget ?? options.agent ?? "codex", { runner: options.runner });
+  writeServiceState(context, state);
+  const mcpInstall = await installMcpTarget(serviceConfig, options.mcpTarget ?? options.agent ?? "codex", { runner: options.runner });
   state.mcp_install_status = "installed";
-  state.mcp_daemon_install_status = "installed";
+  state.mcp_daemon_install_status = mcpInstall.daemon_install_mode === "detached_process" ? "detached_process" : "installed";
+  writeServiceState(context, state);
   markPhaseDone(state, "S6_WIRE_LOCAL", ts, "local credentials, connect, and MCP wiring generated");
   markPhaseDone(state, "S7_VERIFY_E2E", ts, "deployment automation completed");
 

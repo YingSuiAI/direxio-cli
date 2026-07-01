@@ -170,6 +170,54 @@ describe("mcp commands", () => {
     ]);
   });
 
+  it("falls back to a detached daemon run when Windows task registration is denied", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-mcp-"));
+    writeCredentials(home);
+    const config = loadServiceConfig({ homeDir: home, service: "im.example.com" });
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const detached: Array<{ command: string; args: string[] }> = [];
+
+    await expect(
+      installMcpDaemon(config, {
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          if (command === "direxio-mcp" && args[1] === "install") {
+            return { stdout: "", stderr: "schtasks install failed: ERROR: Access is denied.", exitCode: 1 };
+          }
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+        startDetached: (command, args) => {
+          detached.push({ command, args });
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      service_id: "im.example.com",
+      daemon_url: "http://127.0.0.1:19757/mcp",
+      daemon_install_mode: "detached_process"
+    });
+
+    expect(detached).toEqual([
+      {
+        command: "direxio-mcp",
+        args: [
+          "daemon",
+          "run",
+          "--service-name",
+          "im.example.com",
+          "--credentials-file",
+          join(home, ".direxio", "nodes", "im.example.com", "credentials.json"),
+          "--node-id",
+          "codex-im",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "19757"
+        ]
+      }
+    ]);
+  });
+
   it("runs the stdio proxy against the local mcp daemon URL", async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
 

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import * as z from "zod/v4";
 import { defaultRunner, type CommandResult, type CommandRunner } from "./connect.js";
 import type { ServiceConfig } from "./service-context.js";
@@ -80,6 +81,7 @@ export interface McpRuntimeOptions {
   npmPackage?: string;
   host?: string;
   port?: string;
+  startDetached?: (command: string, args: string[]) => void;
 }
 
 export interface McpInstallReport {
@@ -87,6 +89,7 @@ export interface McpInstallReport {
   service_id: string;
   package: string;
   daemon_url: string;
+  daemon_install_mode?: "service" | "detached_process";
 }
 
 export function createDoctorReport(config: ServiceConfig): DoctorReport {
@@ -157,12 +160,22 @@ export async function installMcpDaemon(config: ServiceConfig, options: McpRuntim
   }
   args.push("--host", mcpDaemonHost(options), "--port", mcpDaemonPort(options));
 
-  await runMcpDaemon(options, args);
+  const installResult = await tryMcpDaemon(options, args);
+  let daemonInstallMode: McpInstallReport["daemon_install_mode"] = "service";
+  if (installResult.exitCode !== 0) {
+    const message = (installResult.stderr || installResult.stdout).trim();
+    if (!isWindowsTaskAccessDenied(message)) {
+      throw new Error(message || `direxio-mcp exited with ${installResult.exitCode}`);
+    }
+    startDetachedMcpDaemon(config, options);
+    daemonInstallMode = "detached_process";
+  }
   return {
     ok: true,
     service_id: config.serviceId,
     package: packageName,
-    daemon_url: mcpDaemonUrl(options)
+    daemon_url: mcpDaemonUrl(options),
+    ...(daemonInstallMode === "detached_process" ? { daemon_install_mode: daemonInstallMode } : {})
   };
 }
 
@@ -179,6 +192,11 @@ export function mcpProxyCommand(options: McpRuntimeOptions = {}): { command: str
 
 async function runMcpDaemon(options: McpRuntimeOptions, args: string[]): Promise<CommandResult> {
   return runCommand(options, options.binary ?? "direxio-mcp", args);
+}
+
+async function tryMcpDaemon(options: McpRuntimeOptions, args: string[]): Promise<CommandResult> {
+  const runner = options.runner ?? defaultRunner;
+  return runner(options.binary ?? "direxio-mcp", args);
 }
 
 async function runCommand(options: McpRuntimeOptions, command: string, args: string[]): Promise<CommandResult> {
@@ -204,6 +222,35 @@ function mcpDaemonPort(options: McpRuntimeOptions): string {
 
 function mcpDaemonUrl(options: McpRuntimeOptions): string {
   return `http://${mcpDaemonHost(options)}:${mcpDaemonPort(options)}/mcp`;
+}
+
+function startDetachedMcpDaemon(config: ServiceConfig, options: McpRuntimeOptions): void {
+  const args = [
+    "daemon",
+    "run",
+    "--service-name",
+    config.serviceId,
+    "--credentials-file",
+    config.credentialsFile
+  ];
+  if (config.agentNodeId) args.push("--node-id", config.agentNodeId);
+  args.push("--host", mcpDaemonHost(options), "--port", mcpDaemonPort(options));
+  const command = options.binary ?? "direxio-mcp";
+  if (options.startDetached) {
+    options.startDetached(command, args);
+    return;
+  }
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    shell: process.platform === "win32",
+    windowsHide: true
+  });
+  child.unref();
+}
+
+function isWindowsTaskAccessDenied(message: string): boolean {
+  return /schtasks .*access is denied|ERROR:\s*Access is denied/i.test(message);
 }
 
 function isToolName(value: string): value is ToolName {
