@@ -25,13 +25,15 @@ describe("destroy operation", () => {
           eip_id: "eipalloc-destroy",
           sg_id: "sg-destroy",
           key_name: "direxio-destroy",
-          route53_zone_id: "ZDESTROY"
+          route53_zone_id: "ZDESTROY",
+          route53_zone_created_by_deployer: "true"
         }
       }),
       "utf8"
     );
     writeFileSync(join(connectDir, "config.toml"), "config = true\n", "utf8");
     const calls: Array<{ command: string; args: string[] }> = [];
+    let route53ChangeBatchContent = "";
 
     await expect(
       destroyService({
@@ -42,6 +44,10 @@ describe("destroy operation", () => {
         now: () => "2026-07-01T04:05:06.000Z",
         runner: async (command, args) => {
           calls.push({ command, args });
+          if (command === "aws" && args[0] === "route53" && args[1] === "change-resource-record-sets") {
+            const changeBatch = args[args.indexOf("--change-batch") + 1] ?? "";
+            route53ChangeBatchContent = readFileSync(changeBatch.replace(/^file:\/\//, ""), "utf8");
+          }
           if (command === "direxio-connect" && args[1] === "status") {
             return { stdout: `Status: Running\nWorkDir: ${connectDir}\n`, stderr: "", exitCode: 0 };
           }
@@ -58,6 +64,12 @@ describe("destroy operation", () => {
     });
 
     expect(calls.some((call) => call.command === "direxio-connect" && call.args[1] === "stop")).toBe(true);
+    const route53Change = calls.find((call) => call.command === "aws" && call.args[0] === "route53" && call.args[1] === "change-resource-record-sets");
+    const changeBatch = route53Change?.args[(route53Change?.args.indexOf("--change-batch") ?? -1) + 1] ?? "";
+    expect(changeBatch).toMatch(/^file:\/\//);
+    expect(JSON.parse(route53ChangeBatchContent)).toMatchObject({
+      Changes: [{ Action: "DELETE", ResourceRecordSet: { Name: "destroy.example.test." } }]
+    });
     expect(calls).toEqual(
       expect.arrayContaining([
         { command: "aws", args: ["ec2", "terminate-instances", "--instance-ids", "i-destroy"] },
@@ -89,6 +101,51 @@ describe("destroy operation", () => {
       },
       security: {
         secrets_included: false
+      }
+    });
+  });
+
+  it("does not delete a parent Route53 zone it did not create", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-parent-zone-"));
+    const serviceDir = join(home, ".direxio", "nodes", "q10.direxio.ai");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        domain: "q10.direxio.ai",
+        agent_service_id: "q10.direxio.ai",
+        agent_service_dir: serviceDir,
+        resources: {
+          public_ip: "203.0.113.43",
+          route53_zone_id: "ZPARENT",
+          route53_zone_name: "direxio.ai",
+          route53_zone_created_by_deployer: "false"
+        }
+      }),
+      "utf8"
+    );
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await destroyService({
+      serviceId: "q10.direxio.ai",
+      serviceDir,
+      credentialsFile: join(serviceDir, "credentials.json")
+    }, {
+      runner: async (command, args) => {
+        calls.push({ command, args });
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(calls.some((call) => call.command === "aws" && call.args[0] === "route53" && call.args[1] === "change-resource-record-sets")).toBe(true);
+    expect(calls.some((call) => call.command === "aws" && call.args[0] === "route53" && call.args[1] === "delete-hosted-zone")).toBe(false);
+    const reportPath = join(home, ".direxio", "reports", "q10.direxio.ai", "operation-report.json");
+    expect(JSON.parse(readFileSync(reportPath, "utf8"))).toMatchObject({
+      destroy: {
+        evidence: {
+          route53_a_record: { status: "deleted" },
+          route53_hosted_zone: { status: "skipped" }
+        }
       }
     });
   });

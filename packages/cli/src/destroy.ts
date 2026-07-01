@@ -72,14 +72,18 @@ async function destroyAwsResources(state: ServiceState, options: DestroyOptions,
         "--hosted-zone-id",
         String(resources.route53_zone_id),
         "--change-batch",
-        route53DeleteARecordBatch(String(state.domain), String(resources.public_ip))
+        `file://${writeRoute53DeleteBatch(state, String(state.domain), String(resources.public_ip))}`
       ]);
       recordEvidence(state, "route53_a_record", "deleted", `${state.domain} ${resources.public_ip}`, ts);
     } else {
       recordEvidence(state, "route53_a_record", "skipped", "missing domain or public_ip", ts);
     }
-    await runAws(options, ["route53", "delete-hosted-zone", "--id", String(resources.route53_zone_id)]);
-    recordEvidence(state, "route53_hosted_zone", "deleted", String(resources.route53_zone_id), ts);
+    if (String(resources.route53_zone_created_by_deployer) === "true") {
+      await runAws(options, ["route53", "delete-hosted-zone", "--id", String(resources.route53_zone_id)]);
+      recordEvidence(state, "route53_hosted_zone", "deleted", String(resources.route53_zone_id), ts);
+    } else {
+      recordEvidence(state, "route53_hosted_zone", "skipped", "parent or user-managed hosted zone not deleted", ts);
+    }
   } else {
     recordEvidence(state, "route53_a_record", "skipped", "no route53_zone_id recorded", ts);
     recordEvidence(state, "route53_hosted_zone", "skipped", "no route53_zone_id recorded", ts);
@@ -165,6 +169,13 @@ function route53DeleteARecordBatch(domain: string, ip: string): string {
       }
     ]
   });
+}
+
+function writeRoute53DeleteBatch(state: ServiceState, domain: string, ip: string): string {
+  const serviceDir = String(state.agent_service_dir || "");
+  const file = join(serviceDir, "route53-delete-a.json");
+  writeFileSync(file, `${route53DeleteARecordBatch(domain, ip)}\n`, "utf8");
+  return file;
 }
 
 function pathsEqual(left: string, right: string): boolean {
