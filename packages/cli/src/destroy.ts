@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, normalize } from "node:path";
 import { connectStatus, defaultRunner, type CommandResult, type CommandRunner } from "./connect.js";
 import type { ServiceContext } from "./service-context.js";
@@ -147,6 +147,7 @@ function removeServiceDir(context: ServiceContext): void {
   if (!isSafeServiceDir(context.serviceDir)) {
     throw new Error(`refusing to remove unsafe service directory: ${context.serviceDir}`);
   }
+  makeTreeWritable(context.serviceDir);
   rmSync(context.serviceDir, { recursive: true, force: true });
 }
 
@@ -169,6 +170,18 @@ function route53DeleteARecordBatch(domain: string, ip: string): string {
       }
     ]
   });
+}
+
+function makeTreeWritable(target: string): void {
+  try {
+    const stat = statSync(target);
+    if (stat.isDirectory()) {
+      for (const entry of readdirSync(target)) makeTreeWritable(join(target, entry));
+    }
+    chmodSync(target, 0o700);
+  } catch {
+    return;
+  }
 }
 
 function writeRoute53DeleteBatch(state: ServiceState, domain: string, ip: string): string {
