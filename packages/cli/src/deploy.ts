@@ -79,12 +79,15 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
   markPhaseDone(state, "S0_PREREQ_AWS", ts, "AWS caller identity verified");
   markPhaseDone(state, "S1_PREFLIGHT", ts, "deployment inputs validated");
   markPhaseDone(state, "S2_DOMAIN", ts, "production domain binding confirmed");
+  writeServiceState(context, state);
 
-  await provisionAwsResources(options, state, domain);
+  await provisionAwsResources(options, context, state, domain);
   markPhaseDone(state, "S3_PROVISION", ts, "AWS resources provisioned");
+  writeServiceState(context, state);
 
   await waitForHealthz(options, domain);
   markPhaseDone(state, "S4_BOOTSTRAP_STACK", ts, `healthz 200 @ https://${domain}`);
+  writeServiceState(context, state);
 
   const bootstrap = await bootstrapRemote(options, state, domain);
   Object.assign(state, {
@@ -95,6 +98,7 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
     as_url: `https://${domain}`
   });
   markPhaseDone(state, "S5_INIT_TOKENS", ts, "bootstrap credentials collected");
+  writeServiceState(context, state);
   writeCredentials(context, domain, bootstrap, state.agent_node_id);
 
   const matrixSession = await createMatrixSession(options, domain, bootstrap.agent_token, `direxio-connect-${serviceId}`);
@@ -196,12 +200,15 @@ function loadOrInitializeState(options: DeployOptions, context: ServiceContext, 
   };
 }
 
-async function provisionAwsResources(options: DeployOptions, state: ServiceState, domain: string): Promise<void> {
+async function provisionAwsResources(options: DeployOptions, context: ServiceContext, state: ServiceState, domain: string): Promise<void> {
   if (!state.resources || typeof state.resources !== "object") state.resources = {};
   const ami = stringValue(state.resources.ami_id) || await lookupUbuntuAmi(options);
   state.resources.ami_id = ami;
+  writeServiceState(context, state);
   const sgId = stringValue(state.resources.sg_id) || await createSecurityGroup(options, domain);
   state.resources.sg_id = sgId;
+  state.resources.sg_ingress_configured = true;
+  writeServiceState(context, state);
 
   if (!stringValue(state.resources.key_name) || !stringValue(state.resources.key_file)) {
     const key = parseJsonObject((await runAws(options, ["ec2", "create-key-pair", "--key-name", `direxio-${domain}`])).stdout);
@@ -210,10 +217,12 @@ async function provisionAwsResources(options: DeployOptions, state: ServiceState
     if (typeof key.KeyMaterial === "string") {
       writeFileSync(String(state.resources.key_file), key.KeyMaterial, { encoding: "utf8", mode: 0o600 });
     }
+    writeServiceState(context, state);
   }
 
   if (!stringValue(state.resources.user_data) || !stringValue(state.resources.instance_id)) {
     state.resources.user_data = renderUserData(state, domain);
+    writeServiceState(context, state);
   }
   if (!stringValue(state.resources.instance_id)) {
     const instance = parseJsonObject((await runAws(options, [
@@ -235,12 +244,14 @@ async function provisionAwsResources(options: DeployOptions, state: ServiceState
     const createdInstance = instance.Instances?.[0] ?? {};
     state.resources.instance_id = createdInstance.InstanceId;
     state.resources.root_volume_id = createdInstance.BlockDeviceMappings?.[0]?.Ebs?.VolumeId ?? "";
+    writeServiceState(context, state);
   }
 
   if (!stringValue(state.resources.eip_id) || !stringValue(state.resources.public_ip)) {
     const address = parseJsonObject((await runAws(options, ["ec2", "allocate-address", "--domain", "vpc"])).stdout);
     state.resources.eip_id = address.AllocationId;
     state.resources.public_ip = address.PublicIp;
+    writeServiceState(context, state);
     await runAws(options, ["ec2", "associate-address", "--instance-id", String(state.resources.instance_id), "--allocation-id", String(address.AllocationId)]);
   }
 
@@ -249,6 +260,7 @@ async function provisionAwsResources(options: DeployOptions, state: ServiceState
     state.resources.route53_zone_id = zone.id;
     state.resources.route53_zone_name = zone.name;
     state.resources.route53_zone_created_by_deployer = String(zone.created);
+    writeServiceState(context, state);
   }
   await runAws(options, [
     "route53",

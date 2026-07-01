@@ -278,6 +278,42 @@ describe("deploy operation", () => {
     });
   });
 
+  it("persists provisioned resources before a later AWS failure", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-partial-"));
+    const serviceDir = join(home, ".direxio", "nodes", "partial.example.test");
+
+    await expect(
+      deployService({
+        homeDir: home,
+        serviceId: "partial.example.test",
+        domain: "partial.example.test",
+        region: "us-east-1",
+        confirmDomainBinding: true,
+        runner: async (command, args) => {
+          const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+          if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "ssm") return { stdout: '{"Parameters":[{"Value":"ami-partial"}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-security-group") return { stdout: '{"GroupId":"sg-partial"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-key-pair") return { stdout: '{"KeyName":"direxio-partial","KeyMaterial":"PRIVATE"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "run-instances") return { stdout: "", stderr: "capacity unavailable", exitCode: 1 };
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+      })
+    ).rejects.toThrow("capacity unavailable");
+
+    expect(JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"))).toMatchObject({
+      phase: "S2_DOMAIN",
+      resources: {
+        ami_id: "ami-partial",
+        sg_id: "sg-partial",
+        sg_ingress_configured: true,
+        key_name: "direxio-partial",
+        key_file: join(serviceDir, "direxio-partial.pem"),
+        user_data: join(serviceDir, "user-data.yaml")
+      }
+    });
+  });
+
   it("requires an explicit AWS region", async () => {
     await expect(
       deployService({
