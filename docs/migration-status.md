@@ -20,6 +20,11 @@ This file records verified migration progress. A module is marked complete only 
   - status uses the migrated operation-report model and redacts initialization codes, Matrix tokens, agent tokens, and AWS session secrets.
   - runtime verification writes `runtime_checks.connect_daemon`, `runtime_checks.mcp_doctor`, `runtime_checks.mcp_tools`, `runtime_checks.mcp_smoke`, and `runtime_checks.summary` into `state.json`.
   - confirmation writes `user_confirmations` into `state.json`; `agent-mcp-runtime` requires `runtime_checks.summary.status=passed` plus runtime probe confirmation.
+- Existing node operations slice:
+  - `direxio update --service <service_id> --json`
+  - `direxio reset-app-data --service <service_id> --confirm --json`
+  - update runs the migrated remote Docker Compose pull/up command over SSH and writes `operation-report.json` without clearing local confirmations or runtime checks.
+  - reset requires explicit confirmation, runs the migrated remote data-reset command over SSH, stops only the matching service-scoped `direxio-connect` daemon, clears stale credentials/confirmations/runtime checks, and marks local wiring phases refresh-pending.
 - MCP direct CLI slice:
   - `direxio mcp doctor --service <service_id> --json`
   - `direxio mcp tools --json`
@@ -56,8 +61,6 @@ These modules are not migrated and must not be reported as complete:
 
 - `direxio deploy`
 - `direxio destroy`
-- `direxio update`
-- `direxio reset-app-data`
 - `direxio mcp install --target <runtime>`
 - connect config generation during deploy/S6 wiring
 - `direxio skill install/update/refresh`

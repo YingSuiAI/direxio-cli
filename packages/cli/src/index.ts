@@ -10,6 +10,7 @@ import {
   mcpDaemonStatus,
   mcpProxyCommand
 } from "./mcp.js";
+import { resetAppData, updateService } from "./ops.js";
 import { loadServiceConfig, resolveServiceContext, writeActiveService } from "./service-context.js";
 import { buildStatusReport, confirmUserGate } from "./state.js";
 import { verifyRuntime } from "./verify.js";
@@ -55,7 +56,21 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     if (command === "verify") {
       return await runVerify(rest, runtime, stdout);
     }
-    if (["deploy", "destroy", "update", "reset-app-data", "skill"].includes(command)) {
+    if (command === "update") {
+      const context = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") });
+      printValue(
+        await updateService(context, { runner: runtime.runner, messageServerImage: optionValue(rest, "--image") }),
+        rest.includes("--json"),
+        stdout
+      );
+      return 0;
+    }
+    if (command === "reset-app-data") {
+      const context = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") });
+      printValue(await resetAppData(context, { runner: runtime.runner, confirm: rest.includes("--confirm") }), rest.includes("--json"), stdout);
+      return 0;
+    }
+    if (["deploy", "destroy", "skill"].includes(command)) {
       stderr(`${command} migration is planned but not implemented in this slice`);
       return 2;
     }

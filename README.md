@@ -9,6 +9,8 @@ Unified local product surface for deploying Direxio, wiring the Matrix agent bri
 ```bash
 direxio deploy
 direxio status --service <service-id>
+direxio update --service <service-id>
+direxio reset-app-data --service <service-id> --confirm
 direxio destroy
 direxio connect install --service <service-id>
 direxio connect status

@@ -238,6 +238,24 @@ export function buildStatusReport(context: ServiceContext, generatedAt: string =
   return buildOperationReport("status", "status_report", stateFile, generatedAt, state);
 }
 
+export function operationReportFile(context: ServiceContext): string {
+  return join(context.serviceDir, "operation-report.json");
+}
+
+export function writeOperationReport(
+  context: ServiceContext,
+  operation: string,
+  status: string,
+  state: ServiceState = readServiceState(context),
+  generatedAt: string = new Date().toISOString()
+): string {
+  const reportPath = operationReportFile(context);
+  mkdirSync(dirname(reportPath), { recursive: true });
+  const report = buildOperationReport(operation, status, serviceStateFile(context), generatedAt, state);
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  return reportPath;
+}
+
 function normalizeGate(rawGate: string): string {
   return rawGate.trim().replace(/-/g, "_");
 }

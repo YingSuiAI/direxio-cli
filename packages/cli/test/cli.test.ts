@@ -376,4 +376,54 @@ describe("direxio CLI", () => {
       failed_count: 0
     });
   });
+
+  it("routes update and reset app data operations", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    const serviceDir = join(home, ".direxio", "nodes", "ops.example.test");
+    const connectDir = join(serviceDir, "direxio-connect");
+    mkdirSync(connectDir, { recursive: true });
+    const state = {
+      domain: "ops.example.test",
+      agent_service_id: "ops.example.test",
+      agent_service_dir: serviceDir,
+      connect_config: join(connectDir, "config.toml"),
+      connect_binary: "direxio-connect",
+      resources: { public_ip: "203.0.113.77", key_file: join(serviceDir, "ssh.pem") }
+    };
+    writeFileSync(join(serviceDir, "state.json"), JSON.stringify(state), "utf8");
+    writeFileSync(join(connectDir, "config.toml"), "config = true\n", "utf8");
+    const stdout: string[] = [];
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    const updateCode = await runCli(["update", "--service", "ops.example.test", "--json"], {
+      homeDir: home,
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async (command, args) => {
+        calls.push({ command, args });
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(updateCode).toBe(0);
+    expect(JSON.parse(stdout.pop() ?? "{}")).toMatchObject({ ok: true, operation: "update" });
+
+    const resetCode = await runCli(["reset-app-data", "--service", "ops.example.test", "--confirm", "--json"], {
+      homeDir: home,
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async (command, args) => {
+        calls.push({ command, args });
+        if (command === "direxio-connect" && args[1] === "status") {
+          return { stdout: `Status: Running\nWorkDir: ${connectDir}\n`, stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(resetCode).toBe(0);
+    expect(JSON.parse(stdout.pop() ?? "{}")).toMatchObject({ ok: true, operation: "reset_app_data" });
+    expect(calls.some((call) => call.command === "ssh")).toBe(true);
+    expect(calls.some((call) => call.command === "direxio-connect" && call.args[1] === "stop")).toBe(true);
+  });
 });
