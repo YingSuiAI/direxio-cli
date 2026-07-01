@@ -181,6 +181,20 @@ describe("deploy operation", () => {
       expect.objectContaining({ command: "aws", args: expect.arrayContaining(["authorize-security-group-ingress", "--protocol", "udp", "--port", "49160-49200"]) })
     ]));
     expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "route53" && normalizedAwsArgs(call.args)[1] === "create-hosted-zone")).toBe(false);
+    const route53Change = calls.find((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "route53" && normalizedAwsArgs(call.args)[1] === "change-resource-record-sets");
+    const changeBatch = route53Change?.args[(route53Change?.args.indexOf("--change-batch") ?? -1) + 1] ?? "";
+    expect(changeBatch).toMatch(/^file:\/\//);
+    expect(JSON.parse(readFileSync(changeBatch.replace(/^file:\/\//, ""), "utf8"))).toMatchObject({
+      Changes: [
+        {
+          Action: "UPSERT",
+          ResourceRecordSet: {
+            Name: "deploy.example.test.",
+            ResourceRecords: [{ Value: "203.0.113.42" }]
+          }
+        }
+      ]
+    });
     expect(calls.some((call) => call.command === "ssh")).toBe(true);
     expect(calls.some((call) => call.command === "direxio-connect" && call.args[1] === "install")).toBe(true);
     expect(calls.some((call) => call.command === "direxio-mcp" && call.args[1] === "install")).toBe(true);

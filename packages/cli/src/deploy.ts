@@ -262,13 +262,15 @@ async function provisionAwsResources(options: DeployOptions, context: ServiceCon
     state.resources.route53_zone_created_by_deployer = String(zone.created);
     writeServiceState(context, state);
   }
+  const route53ChangeBatchFile = writeRoute53UpsertBatch(state, domain, String(state.resources.public_ip));
+  writeServiceState(context, state);
   await runAws(options, [
     "route53",
     "change-resource-record-sets",
     "--hosted-zone-id",
     String(state.resources.route53_zone_id),
     "--change-batch",
-    route53UpsertARecordBatch(domain, String(state.resources.public_ip))
+    `file://${route53ChangeBatchFile}`
   ]);
 }
 
@@ -550,6 +552,13 @@ function route53UpsertARecordBatch(domain: string, ip: string): string {
       }
     ]
   });
+}
+
+function writeRoute53UpsertBatch(state: ServiceState, domain: string, ip: string): string {
+  const file = join(String(state.agent_service_dir), "route53-upsert-a.json");
+  writeFileSync(file, `${route53UpsertARecordBatch(domain, ip)}\n`, "utf8");
+  state.resources.route53_change_batch = file;
+  return file;
 }
 
 function shellQuote(value: string): string {
