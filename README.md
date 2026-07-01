@@ -11,7 +11,7 @@ direxio deploy
 direxio status --service <service-id>
 direxio update --service <service-id>
 direxio reset-app-data --service <service-id> --confirm
-direxio destroy
+direxio destroy --service <service-id>
 direxio connect install --service <service-id>
 direxio connect status
 direxio mcp install --service <service-id>

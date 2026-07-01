@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
+import { destroyService } from "./destroy.js";
 import {
   callMcpTool,
   createDoctorReport,
@@ -70,7 +71,12 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
       printValue(await resetAppData(context, { runner: runtime.runner, confirm: rest.includes("--confirm") }), rest.includes("--json"), stdout);
       return 0;
     }
-    if (["deploy", "destroy", "skill"].includes(command)) {
+    if (command === "destroy") {
+      const context = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") });
+      printValue(await destroyService(context, { runner: runtime.runner }), rest.includes("--json"), stdout);
+      return 0;
+    }
+    if (["deploy", "skill"].includes(command)) {
       stderr(`${command} migration is planned but not implemented in this slice`);
       return 2;
     }

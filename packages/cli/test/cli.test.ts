@@ -426,4 +426,42 @@ describe("direxio CLI", () => {
     expect(calls.some((call) => call.command === "ssh")).toBe(true);
     expect(calls.some((call) => call.command === "direxio-connect" && call.args[1] === "stop")).toBe(true);
   });
+
+  it("routes destroy through the destroy operation", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
+    const serviceDir = join(home, ".direxio", "nodes", "destroy.example.test");
+    const connectDir = join(serviceDir, "direxio-connect");
+    mkdirSync(connectDir, { recursive: true });
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        domain: "destroy.example.test",
+        agent_service_id: "destroy.example.test",
+        agent_service_dir: serviceDir,
+        connect_config: join(connectDir, "config.toml"),
+        resources: { instance_id: "i-destroy" }
+      }),
+      "utf8"
+    );
+    writeFileSync(join(connectDir, "config.toml"), "config = true\n", "utf8");
+    const stdout: string[] = [];
+
+    const code = await runCli(["destroy", "--service", "destroy.example.test", "--json"], {
+      homeDir: home,
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async (command, args) => {
+        if (command === "direxio-connect" && args[1] === "status") {
+          return { stdout: `Status: Running\nWorkDir: ${connectDir}\n`, stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      ok: true,
+      operation: "destroy"
+    });
+  });
 });
