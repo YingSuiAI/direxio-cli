@@ -8,6 +8,7 @@ import { buildOperationReport, readServiceState, serviceStateFile, type ServiceS
 export interface DestroyOptions {
   runner?: CommandRunner;
   now?: () => string;
+  region?: string;
 }
 
 export interface DestroyResult {
@@ -28,14 +29,18 @@ export async function destroyService(context: ServiceContext, options: DestroyOp
 }
 
 async function destroyAwsResources(state: ServiceState, options: DestroyOptions, ts: string): Promise<void> {
+  const awsOptions = {
+    ...options,
+    region: options.region || stringValue(state.region)
+  };
   const cloudProvider = inferCloudProvider(state);
   if (cloudProvider === "lightsail") {
-    await destroyLightsailResources(state, options, ts);
+    await destroyLightsailResources(state, awsOptions, ts);
   } else {
-    await destroyEc2Resources(state, options, ts);
+    await destroyEc2Resources(state, awsOptions, ts);
   }
 
-  await destroyDnsResources(state, options, ts);
+  await destroyDnsResources(state, awsOptions, ts);
 }
 
 async function destroyEc2Resources(state: ServiceState, options: DestroyOptions, ts: string): Promise<void> {
@@ -179,7 +184,8 @@ async function runAws(options: DestroyOptions, args: string[]): Promise<CommandR
 
 async function tryAws(options: DestroyOptions, args: string[]): Promise<CommandResult> {
   const runner = options.runner ?? defaultRunner;
-  return runner("aws", args);
+  const region = String(options.region || "").trim();
+  return runner("aws", region ? ["--region", region, ...args] : args);
 }
 
 function isAwsNotFound(result: CommandResult): boolean {

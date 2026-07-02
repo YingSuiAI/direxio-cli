@@ -265,6 +265,45 @@ describe("destroy operation", () => {
     });
   });
 
+  it("uses the recorded region when destroying AWS resources", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-region-"));
+    const serviceDir = join(home, ".direxio", "nodes", "region-lightsail.example.test");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        domain: "region-lightsail.example.test",
+        region: "ap-east-1",
+        cloud_provider: "lightsail",
+        domain_mode: "user",
+        agent_service_id: "region-lightsail.example.test",
+        agent_service_dir: serviceDir,
+        resources: {
+          lightsail_instance_name: "direxio-region-lightsail-example-test",
+          lightsail_static_ip_name: "direxio-ip-region-lightsail-example-test",
+          key_name: "direxio-key-region-lightsail-example-test"
+        }
+      }),
+      "utf8"
+    );
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await destroyService({
+      serviceId: "region-lightsail.example.test",
+      serviceDir,
+      credentialsFile: join(serviceDir, "credentials.json")
+    }, {
+      runner: async (command, args) => {
+        calls.push({ command, args });
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    for (const call of calls.filter((call) => call.command === "aws")) {
+      expect(call.args.slice(0, 2)).toEqual(["--region", "ap-east-1"]);
+    }
+  });
+
   it("does not touch Route53 for user-managed DNS state", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-user-dns-"));
     const serviceDir = join(home, ".direxio", "nodes", "user-dns.example.test");
