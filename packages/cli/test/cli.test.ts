@@ -612,7 +612,8 @@ describe("direxio CLI", () => {
     const output = stdout.join("\n");
     expect(output).toContain("direxio skill install --agent <provider>");
     expect(output).toContain("direxio agents list --json");
-    expect(output).toContain("MCP business tools");
+    expect(output).toContain("server operations");
+    expect(output).toContain("MCP smoke");
     expect(output).toContain("npx -y @direxio/cli@latest skill install --agent codex --json");
     expect(output).toContain("direxio --help");
   });
@@ -631,6 +632,34 @@ describe("direxio CLI", () => {
     expect(output).toContain("direxio skill --help");
     expect(output).toContain("confirmation checklist");
     expect(output).toContain("confirm_command");
+    expect(output).toContain("direxio <command> --help");
+  });
+
+  it("prints command-specific operational help", async () => {
+    const deployStdout: string[] = [];
+    const mcpStdout: string[] = [];
+    const updateStdout: string[] = [];
+
+    await expect(runCli(["deploy", "--help"], {
+      stdout: (line) => deployStdout.push(line),
+      stderr: () => {}
+    })).resolves.toBe(0);
+    await expect(runCli(["mcp", "--help"], {
+      stdout: (line) => mcpStdout.push(line),
+      stderr: () => {}
+    })).resolves.toBe(0);
+    await expect(runCli(["update", "--help"], {
+      stdout: (line) => updateStdout.push(line),
+      stderr: () => {}
+    })).resolves.toBe(0);
+
+    expect(deployStdout.join("\n")).toContain("confirmation checklist");
+    expect(deployStdout.join("\n")).toContain("selected_cloud");
+    expect(deployStdout.join("\n")).toContain("confirm_command");
+    expect(mcpStdout.join("\n")).toContain("search_rooms");
+    expect(mcpStdout.join("\n")).toContain("Do not test every MCP tool");
+    expect(updateStdout.join("\n")).toContain("--image direxio/message-server:<tag>");
+    expect(updateStdout.join("\n")).toContain("without recreating Lightsail/EC2");
   });
 
   it("prints a deploy confirmation checklist before creating cloud resources", async () => {

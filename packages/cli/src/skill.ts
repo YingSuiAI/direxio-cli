@@ -90,35 +90,35 @@ direxio mcp proxy --service <service-id>
 
 Use \`direxio verify runtime --service <service-id> --json\` after install, update, restart, or any suspected local agent problem. Do not report the runtime as ready from process existence alone; readiness requires the CLI checks to pass.
 
-## Message And Channel Operations
+## MCP Smoke
 
-Prefer MCP tools for business actions after a service is wired. Discover tools first:
+Use one read-only room query to prove MCP can reach the backend. Do not test every MCP tool during deployment verification.
 
 \`\`\`bash
 direxio mcp tools --json
-direxio mcp call list_contacts --service <service-id> --json '{"limit":20}'
-direxio mcp call search_rooms --service <service-id> --json '{"query":"alice","type":"all","limit":20}'
-direxio mcp call list_messages --service <service-id> --json '{"room_id":"!room:id","limit":20}'
-direxio mcp call send_message --service <service-id> --json '{"room_id":"!room:id","msg":"hello"}'
-direxio mcp call list_room_members --service <service-id> --json '{"room_id":"!room:id","limit":50}'
-direxio mcp call list_channel_posts --service <service-id> --json '{"room_id":"!channel:id","limit":20}'
-direxio mcp call list_post_comments --service <service-id> --json '{"post_id":"<post-id>","limit":20}'
-direxio mcp call comment_channel_post --service <service-id> --json '{"post_id":"<post-id>","msg":"comment text"}'
+direxio mcp call search_rooms --service <service-id> --json '{"type":"all","limit":10}'
 \`\`\`
 
-When \`room_id\` is omitted for \`send_message\` or \`list_messages\`, the service agent room is used if available. Ask the user before sending or commenting when intent, recipient, or content is ambiguous.
+If the smoke query returns without auth, HTTP, or schema errors, MCP connectivity is good enough. For real business actions, first inspect \`direxio mcp tools --json\`, then call only the tool the user actually requested. Ask before any write action such as sending a message or commenting.
 
-## Operations
+## Server Operations
 
 \`\`\`bash
 direxio use <service-id>
 direxio status --service <service-id> --json
-direxio update --service <service-id> --json
+direxio update --service <service-id> --image direxio/message-server:<tag> --json
+direxio verify runtime --service <service-id> --json
+direxio connect status --service <service-id> --json
+direxio connect logs --service <service-id> --lines 120
 direxio reset-app-data --service <service-id> --confirm --json
 direxio destroy --service <service-id> --json
 \`\`\`
 
+\`status\` is the first read-only check for server state, phase progress, redacted resource ids, and local runtime evidence. \`update --image\` restarts the backend image in place without recreating Lightsail/EC2, DNS, fixed IP, or Docker volumes; run \`verify runtime\` afterward. \`reset-app-data\` preserves the cloud instance, fixed IP, DNS, and TLS volumes but clears app data and stale local credentials; expect fresh bootstrap credentials and local wiring afterward. \`destroy\` releases recorded cloud resources and removes the service-scoped local runtime files; it does not remove purchased domains or third-party DNS records.
+
 Use \`--agent-install recommend\` only when the user wants files and commands without installing daemons. Use \`--agent-install skip\` only when the user wants credentials/config artifacts without local install.
+
+Run command-specific help when unsure: \`direxio deploy --help\`, \`direxio status --help\`, \`direxio update --help\`, \`direxio reset-app-data --help\`, \`direxio destroy --help\`, \`direxio connect --help\`, and \`direxio mcp --help\`.
 
 Never print Matrix access tokens, agent tokens, initialization codes, AWS secrets, private keys, or full credential files. Use \`direxio status --json\`, \`direxio mcp doctor --json\`, and other redacted reports for machine-readable state.
 `;

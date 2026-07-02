@@ -47,6 +47,11 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
       stdout(usage());
       return 0;
     }
+    const commandHelp = commandUsage(command, rest);
+    if (commandHelp) {
+      stdout(commandHelp);
+      return 0;
+    }
     if (command === "use") {
       const serviceId = rest[0]?.trim();
       if (!serviceId) throw new Error("use requires <service-id>");
@@ -440,7 +445,195 @@ function usage(): string {
   direxio skill --help
   direxio use <service-id>
 
-Deploy without --confirm-deploy prints the confirmation checklist first and exits with code 2. Run the returned confirm_command after the user confirms the checklist.`;
+Deploy without --confirm-deploy prints the confirmation checklist first and exits with code 2. Run the returned confirm_command after the user confirms the checklist.
+Run direxio <command> --help for command-specific operations and recovery guidance.`;
+}
+
+function commandUsage(command: string, argv: string[]): string | undefined {
+  if (!wantsCommandHelp(argv)) return undefined;
+  switch (command) {
+    case "deploy":
+      return deployUsage();
+    case "status":
+      return statusUsage();
+    case "update":
+      return updateUsage();
+    case "reset-app-data":
+      return resetAppDataUsage();
+    case "destroy":
+      return destroyUsage();
+    case "connect":
+      return connectUsage();
+    case "mcp":
+      return mcpUsage();
+    case "agents":
+      return agentsUsage();
+    case "aws":
+      return awsUsage();
+    case "onboard":
+      return onboardUsage();
+    case "verify":
+      return verifyUsage();
+    case "confirm":
+      return confirmUsage();
+    case "use":
+      return useUsage();
+    case "skill":
+      return skillUsage();
+    default:
+      return undefined;
+  }
+}
+
+function wantsCommandHelp(argv: string[]): boolean {
+  return argv[0] === "help" || argv.includes("--help") || argv.includes("-h");
+}
+
+function deployUsage(): string {
+  return `Usage:
+  direxio deploy --service <id> --domain <domain> --region <aws-region> --dns auto --agent-install auto --confirm-domain [--json]
+  direxio deploy --service <id> --domain <domain> --region <aws-region> --cloud <lightsail|ec2> --dns <auto|route53|user> --agent-install <auto|recommend|skip> --confirm-domain --confirm-deploy [--json]
+
+Behavior:
+  Without --confirm-deploy, deploy performs preflight discovery only, prints a confirmation checklist, and exits with code 2 before creating cloud resources.
+  Review selected_cloud, Lightsail availability zone or EC2 fallback, DNS mode, agent install mode, estimated billing notes, and confirm_command with the user.
+  Lightsail is the default. The checklist queries Free Tier usage, Lightsail bundles, and availability zones before selecting EC2 fallback.
+  --dns auto uses Route53 when a matching public hosted zone exists; otherwise it waits for user-managed DNS.
+  --agent-install auto installs and verifies direxio-connect and direxio-mcp before the deployment is considered ready.
+
+After success:
+  direxio status --service <id> --json
+  direxio verify runtime --service <id> --json
+  direxio mcp call search_rooms --service <id> --json '{"type":"all","limit":10}'`;
+}
+
+function statusUsage(): string {
+  return `Usage:
+  direxio status --service <id> [--json]
+  direxio use <id>
+  direxio status [--json]
+
+Purpose:
+  Read the redacted local service state, current deployment phase, resource ids, runtime evidence, and operation report path.
+  Use this before update, reset, destroy, or recovery decisions. Status output must not expose Matrix tokens, AWS secrets, private keys, or initialization codes.`;
+}
+
+function updateUsage(): string {
+  return `Usage:
+  direxio update --service <id> [--image direxio/message-server:<tag>] [--json]
+
+Purpose:
+  Update the running backend image in place over SSH. This restarts Docker Compose on the recorded cloud instance without recreating Lightsail/EC2, DNS, fixed IP, or Docker volumes.
+
+Recommended follow-up:
+  direxio status --service <id> --json
+  direxio verify runtime --service <id> --json
+  direxio connect logs --service <id> --lines 120`;
+}
+
+function resetAppDataUsage(): string {
+  return `Usage:
+  direxio reset-app-data --service <id> --confirm [--json]
+
+Purpose:
+  Clear app data on the existing server while preserving the cloud instance, fixed IP, DNS, and Caddy TLS volumes.
+  This invalidates old app users, rooms, messages, initialization code, access token, agent token, and local runtime evidence.
+
+Recommended follow-up:
+  direxio deploy --service <id> --domain <domain> --region <aws-region> --confirm-domain --confirm-deploy --json
+  direxio verify runtime --service <id> --json`;
+}
+
+function destroyUsage(): string {
+  return `Usage:
+  direxio destroy --service <id> [--json]
+
+Purpose:
+  Stop the matching service-scoped local connect daemon, release recorded cloud resources, and remove local service files.
+  Destroy uses recorded state. It does not remove purchased domains, user-owned hosted zones, or third-party DNS records.`;
+}
+
+function connectUsage(): string {
+  return `Usage:
+  direxio connect install --service <id> [--json]
+  direxio connect status --service <id> [--json]
+  direxio connect logs --service <id> [--lines 120]
+  direxio connect restart --service <id> [--json]
+
+Purpose:
+  Manage the service-scoped direxio-connect Matrix bridge for the selected local agent runtime.
+  Readiness requires status plus recent logs showing the bridge is running; do not treat process existence alone as success.`;
+}
+
+function mcpUsage(): string {
+  return `Usage:
+  direxio mcp install --service <id> --target <provider> [--json]
+  direxio mcp status --service <id> [--json]
+  direxio mcp doctor --service <id> [--json]
+  direxio mcp tools [--json]
+  direxio mcp call <tool-name> --service <id> --json '<input>'
+  direxio mcp proxy --service <id>
+
+Smoke test:
+  direxio mcp call search_rooms --service <id> --json '{"type":"all","limit":10}'
+
+Guidance:
+  Use tools for discovery and one search_rooms call for read-only connectivity smoke. Do not test every MCP tool during deployment verification.
+  For real business operations, call only the user-requested tool. Ask before write actions such as sending messages or comments.`;
+}
+
+function agentsUsage(): string {
+  return `Usage:
+  direxio agents list [--json]
+  direxio agents check --agent <provider> [--json]
+
+Purpose:
+  List supported provider plugins and check the selected local agent executable before wiring connect or MCP.
+  Supported providers include codex, cursor, gemini, claudecode, copilot, opencode, qoder, reasonix, tmux, and the rest shown by agents list.`;
+}
+
+function awsUsage(): string {
+  return `Usage:
+  direxio aws import-csv <aws-access-key.csv> --profile direxio-deployer --region <aws-region> [--json]
+  direxio aws verify --profile direxio-deployer [--json]
+
+Purpose:
+  Import and verify deployment AWS credentials. Never print or commit AWS secrets. Prefer the dedicated DirexioDeployer IAM user path over root credentials when the user can complete the extra AWS console steps.`;
+}
+
+function onboardUsage(): string {
+  return `Usage:
+  direxio onboard aws [--json]
+
+Purpose:
+  Explain AWS account setup options, including root access key and dedicated IAM deployment user paths, before credentials are imported.`;
+}
+
+function verifyUsage(): string {
+  return `Usage:
+  direxio verify runtime --service <id> [--json]
+
+Purpose:
+  Verify local runtime readiness after deploy, connect install, MCP install, update, restart, or suspected local agent issues.
+  The runtime check includes redacted credential inspection, connect daemon readiness, MCP doctor/tool discovery, and one read-only backend smoke.`;
+}
+
+function confirmUsage(): string {
+  return `Usage:
+  direxio confirm app-initialization --service <id> --evidence "<what the user completed>" [--json]
+  direxio confirm real-chat --service <id> --evidence "<what the user observed>" [--json]
+  direxio confirm agent-mcp-runtime --service <id> --runtime-probe --evidence "<what runtime probe proved>" [--json]
+
+Purpose:
+  Record user/runtime product gates with concrete evidence. Do not use generic evidence such as ok, yes, or done.`;
+}
+
+function useUsage(): string {
+  return `Usage:
+  direxio use <service-id>
+
+Purpose:
+  Store the active service id locally so later commands can omit --service. Use explicit --service when operating multiple nodes.`;
 }
 
 function skillUsage(): string {
@@ -452,7 +645,9 @@ function skillUsage(): string {
 Purpose:
   Writes the final Direxio SKILL.md into the selected agent provider's skill directory.
   The generated skill explains deployment, deploy confirmation, local connect wiring,
-  MCP setup, MCP business tools, runtime verification, and safety rules.
+  server operations, MCP smoke, runtime verification, and safety rules.
+  Detailed operational help lives in direxio deploy --help, status --help,
+  update --help, reset-app-data --help, destroy --help, connect --help, and mcp --help.
 
 Find the provider:
   direxio agents list --json

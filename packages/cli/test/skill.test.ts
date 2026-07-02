@@ -25,7 +25,12 @@ describe("skill installation", () => {
     expect(skill).toContain("confirm_command");
     expect(skill).toContain("direxio verify runtime");
     expect(skill).toContain("direxio mcp tools");
-    expect(skill).toContain("direxio mcp call send_message");
+    expect(skill).toContain("Do not test every MCP tool");
+    expect(skill).toContain("direxio mcp call search_rooms");
+    expect(skill).not.toContain("direxio mcp call send_message");
+    expect(skill).toContain("direxio update --service <service-id> --image");
+    expect(skill).toContain("restarts the backend image in place");
+    expect(skill).toContain("Run command-specific help when unsure");
     expect(skill).toContain("Never print Matrix access tokens");
   });
 

@@ -14,6 +14,9 @@ npm install -g @direxio/cli
 ```bash
 direxio --help
 direxio skill --help
+direxio deploy --help
+direxio update --help
+direxio mcp --help
 direxio onboard aws
 direxio aws import-csv <aws-access-key.csv> --profile direxio-deployer --region <aws-region>
 direxio aws verify --profile direxio-deployer
@@ -62,7 +65,7 @@ npx -y @direxio/cli@latest skill install --agent gemini --json
 npx -y @direxio/cli@latest skill install --agent claudecode --json
 ```
 
-If `direxio` is already installed globally, the equivalent command is `direxio skill install --agent <provider> --json`. Use `direxio skill --help` whenever the agent needs to rediscover the bootstrap flow. The generated skill is intentionally a compact runbook: it tells the agent how to inspect `direxio --help`, deploy with the confirmation checklist, verify runtime readiness, wire `direxio-connect`, install MCP snippets, and use MCP business tools such as `list_contacts`, `search_rooms`, `list_messages`, `send_message`, and channel comment operations.
+If `direxio` is already installed globally, the equivalent command is `direxio skill install --agent <provider> --json`. Use `direxio skill --help` whenever the agent needs to rediscover the bootstrap flow. The generated skill is intentionally a compact runbook: it tells the agent how to inspect `direxio --help`, use command-specific help such as `direxio deploy --help` and `direxio update --help`, deploy with the confirmation checklist, verify runtime readiness, wire `direxio-connect`, install MCP snippets, run one read-only `search_rooms` MCP smoke, and operate the server with status, backend image update, app-data reset, and destroy commands.
 
 MCP client snippets are service-scoped and should be installed after a service exists with `direxio mcp install --service <service-id> --target <provider>`.
 
