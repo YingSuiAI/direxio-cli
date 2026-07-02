@@ -49,6 +49,147 @@ export interface DeployResult {
   report: string;
 }
 
+export interface DeployConfirmationPlanOptions extends DeployOptions {
+  selectedCloudSource?: "cli" | "env" | "default" | "availability";
+  confirmCommand?: string;
+}
+
+export async function buildDeployConfirmationPlan(options: DeployConfirmationPlanOptions): Promise<Record<string, any>> {
+  const serviceId = options.serviceId.trim();
+  const domain = normalizeDomainName(options.domain);
+  const region = options.region.trim();
+  if (!serviceId) throw new Error("deploy requires serviceId");
+  if (!domain) throw new Error("deploy requires domain");
+  if (!region) throw new Error("deploy requires region");
+
+  const ts = options.now?.() ?? new Date().toISOString();
+  const selectedCloud = normalizeCloudProvider(options.cloud ?? "lightsail");
+  const domainMode = normalizeDomainMode(options.domainMode ?? "auto");
+  const agentInstallMode = normalizeAgentInstallMode(options.agentInstallMode ?? "auto");
+  const agent = options.agent ?? "codex";
+  const planOptions = { ...options, region, cloud: selectedCloud };
+  const freeTier = await queryFreeTierUsage(planOptions, ts);
+  const lightsail = await inspectLightsailAvailability(planOptions);
+  const lightsailBundle = await inspectLightsailBundle(planOptions);
+  const lightsailUsable = lightsail.status === "available" && lightsailBundle.status === "available";
+  const lightsailAvailability = freeTierAvailability(freeTier, "lightsail");
+  const ec2Availability = freeTierAvailability(freeTier, "ec2");
+  const selectedCloudSource = options.selectedCloudSource ?? "default";
+  const effectiveSelectedCloud = selectedCloud === "lightsail" && selectedCloudSource !== "cli" && !lightsailUsable ? "ec2" : selectedCloud;
+  const effectiveSelectedCloudSource = effectiveSelectedCloud !== selectedCloud ? "availability" : selectedCloudSource;
+  const recommendedCloud = !lightsailUsable
+    ? "ec2"
+    : lightsailAvailability === "exhausted" && ec2Availability === "remaining"
+      ? "ec2"
+      : "lightsail";
+
+  return {
+    ok: false,
+    operation: "deploy",
+    status: "confirmation_required",
+    service_id: serviceId,
+    domain,
+    region,
+    selected_cloud: effectiveSelectedCloud,
+    selected_cloud_source: effectiveSelectedCloudSource,
+    recommended_cloud: recommendedCloud,
+    choices: {
+      cloud: ["lightsail", "ec2"],
+      dns: ["auto", "route53", "user"],
+      agent_install: ["auto", "recommend", "skip"]
+    },
+    checklist: [
+      {
+        id: "cloud",
+        label: "Cloud provider",
+        selected: effectiveSelectedCloud,
+        recommended: recommendedCloud,
+        choices: ["lightsail", "ec2"]
+      },
+      {
+        id: "lightsail_bundle",
+        label: "Default Lightsail bundle",
+        selected: "$12/month Linux/Unix bundle",
+        details: {
+          status: lightsailBundle.status,
+          selected_bundle_id: lightsailBundle.bundle_id,
+          monthly_usd: DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD,
+          ram_gb: DEFAULT_LIGHTSAIL_RAM_GB,
+          disk_gb: DEFAULT_LIGHTSAIL_DISK_GB,
+          reason: lightsailBundle.reason
+        }
+      },
+      {
+        id: "lightsail_availability_zone",
+        label: "Default Lightsail availability zone",
+        selected: lightsail.selected_zone || defaultLightsailAvailabilityZone(region),
+        details: {
+          status: lightsail.status,
+          default_zone: lightsail.default_zone,
+          available_zones: lightsail.available_zones,
+          unavailable_zones: lightsail.unavailable_zones,
+          reason: lightsail.reason,
+          validation: "deployment queries Lightsail regions; if the default zone is unavailable it selects another available Lightsail zone before recommending EC2"
+        }
+      },
+      {
+        id: "ec2_fallback",
+        label: "Optional EC2 fallback",
+        selected: DEFAULT_EC2_INSTANCE_TYPE,
+        details: {
+          root_volume_gb: DEFAULT_ROOT_VOLUME_GB
+        }
+      },
+      {
+        id: "dns",
+        label: "DNS mode",
+        selected: domainMode,
+        choices: ["auto", "route53", "user"]
+      },
+      {
+        id: "local_install",
+        label: "Local agent install policy",
+        selected: agentInstallMode,
+        choices: ["auto", "recommend", "skip"]
+      },
+      {
+        id: "agent",
+        label: "Agent provider",
+        selected: agent
+      },
+      {
+        id: "mcp_target",
+        label: "MCP target",
+        selected: options.mcpTarget || agent
+      },
+      {
+        id: "workspace",
+        label: "Agent workspace",
+        selected: options.workspace || process.cwd()
+      }
+    ],
+    availability: {
+      lightsail: {
+        status: lightsailUsable ? "available" : "unavailable",
+        bundle: lightsailBundle,
+        availability_zone: lightsail
+      },
+      ec2: {
+        status: "available_if_account_quota_allows",
+        instance_type: DEFAULT_EC2_INSTANCE_TYPE,
+        root_volume_gb: DEFAULT_ROOT_VOLUME_GB
+      }
+    },
+    aws_free_tier: freeTier,
+    confirmations: {
+      domain_binding: options.confirmDomainBinding ? "confirmed" : "required",
+      deploy_plan: "required"
+    },
+    confirm_command: options.confirmCommand || "",
+    note: "Review the selected cloud, DNS, billing, and local install items before rerunning with --confirm-deploy."
+  };
+}
+
 export class WaitingForUserAction extends Error {
   readonly exitCode = 2;
 
@@ -102,11 +243,11 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
     throw new Error("deploy requires confirmed domain binding");
   }
   const agentProvider = await resolveAgentProvider(options.agent ?? "codex");
-  const explicitCloud = options.cloud ?? process.env.DIREXIO_CLOUD_PROVIDER ?? process.env.DIREXIO_DEPLOY_PROVIDER;
+  const requestedCloud = options.cloud ?? process.env.DIREXIO_CLOUD_PROVIDER ?? process.env.DIREXIO_DEPLOY_PROVIDER ?? "lightsail";
   const normalizedOptions: DeployOptions = {
     ...options,
     region,
-    ...(explicitCloud ? { cloud: normalizeCloudProvider(explicitCloud) } : {}),
+    cloud: normalizeCloudProvider(requestedCloud),
     agent: agentProvider.id
   };
 
@@ -225,7 +366,7 @@ function loadOrInitializeState(options: DeployOptions, context: ServiceContext, 
   const existingMode = normalizeDomainMode(existing.domain_mode || "auto");
   const requestedMode = normalizeDomainMode(options.domainMode ?? existingMode);
   const existingCloud = inferCloudProvider(existing);
-  const requestedCloud = normalizeCloudProvider(options.cloud ?? existingCloud);
+  const requestedCloud = normalizeCloudProvider(options.cloud ?? "lightsail");
   const existingInstallMode = normalizeAgentInstallMode(existing.local_install_mode || existing.connect_install_policy || "auto");
   const requestedInstallMode = normalizeAgentInstallMode(options.agentInstallMode ?? existingInstallMode);
   if (options.domainMode && existingMode !== "auto" && requestedMode !== existingMode) {
@@ -428,6 +569,103 @@ interface LightsailBundleSelection {
   cpuCount: number;
 }
 
+interface LightsailAvailabilityInspection {
+  status: "available" | "unavailable" | "unknown";
+  default_zone: string;
+  selected_zone: string;
+  available_zones: string[];
+  unavailable_zones: string[];
+  reason: string;
+}
+
+interface LightsailBundleInspection {
+  status: "available" | "unavailable" | "unknown";
+  bundle_id: string;
+  monthly_usd: number;
+  ram_gb: number;
+  disk_gb: number;
+  reason: string;
+}
+
+async function inspectLightsailAvailability(options: DeployOptions): Promise<LightsailAvailabilityInspection> {
+  const defaultZone = defaultLightsailAvailabilityZone(options.region);
+  const result = await tryAws(options, ["lightsail", "get-regions", "--include-availability-zones"]);
+  if (result.exitCode !== 0) {
+    return {
+      status: "unknown",
+      default_zone: defaultZone,
+      selected_zone: "",
+      available_zones: [],
+      unavailable_zones: [],
+      reason: firstLine(result.stderr || result.stdout || `aws exited with ${result.exitCode}`)
+    };
+  }
+  try {
+    const parsed = parseJsonObject(result.stdout);
+    const inspection = inspectLightsailAvailabilityFromRegions(parsed, options.region);
+    if (inspection.status === "available") return inspection;
+    return {
+      ...inspection,
+      reason: inspection.reason || `no available Lightsail availability zone found for region ${options.region}`
+    };
+  } catch (error) {
+    return {
+      status: "unknown",
+      default_zone: defaultZone,
+      selected_zone: "",
+      available_zones: [],
+      unavailable_zones: [],
+      reason: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function inspectLightsailBundle(options: DeployOptions): Promise<LightsailBundleInspection> {
+  const override = process.env.DIREXIO_LIGHTSAIL_BUNDLE_ID;
+  if (override) {
+    return {
+      status: "available",
+      bundle_id: override,
+      monthly_usd: DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD,
+      ram_gb: DEFAULT_LIGHTSAIL_RAM_GB,
+      disk_gb: DEFAULT_LIGHTSAIL_DISK_GB,
+      reason: "using DIREXIO_LIGHTSAIL_BUNDLE_ID override"
+    };
+  }
+  const result = await tryAws(options, ["lightsail", "get-bundles"]);
+  if (result.exitCode !== 0) {
+    return {
+      status: "unknown",
+      bundle_id: "",
+      monthly_usd: DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD,
+      ram_gb: DEFAULT_LIGHTSAIL_RAM_GB,
+      disk_gb: DEFAULT_LIGHTSAIL_DISK_GB,
+      reason: firstLine(result.stderr || result.stdout || `aws exited with ${result.exitCode}`)
+    };
+  }
+  try {
+    const parsed = parseJsonObject(result.stdout);
+    const selected = selectLightsailBundle(Array.isArray(parsed.bundles) ? parsed.bundles : []);
+    return {
+      status: "available",
+      bundle_id: selected.bundleId,
+      monthly_usd: selected.monthlyPriceUsd,
+      ram_gb: selected.ramGb,
+      disk_gb: selected.diskGb,
+      reason: ""
+    };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      bundle_id: "",
+      monthly_usd: DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD,
+      ram_gb: DEFAULT_LIGHTSAIL_RAM_GB,
+      disk_gb: DEFAULT_LIGHTSAIL_DISK_GB,
+      reason: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 async function recordCloudRecommendation(options: DeployOptions, context: ServiceContext, state: ServiceState, ts: string): Promise<void> {
   const freeTier = await queryFreeTierUsage(options, ts);
   const lightsailAvailability = freeTierAvailability(freeTier, "lightsail");
@@ -620,19 +858,56 @@ function recordLightsailBundle(state: ServiceState, bundle: LightsailBundleSelec
 async function resolveLightsailAvailabilityZone(options: DeployOptions): Promise<string> {
   const override = process.env.DIREXIO_LIGHTSAIL_AVAILABILITY_ZONE;
   if (override) return override;
-  const regions = await tryAws(options, ["lightsail", "get-regions", "--include-availability-zones"]);
-  if (regions.exitCode === 0) {
-    try {
-      const parsed = parseJsonObject(regions.stdout);
-      const region = (Array.isArray(parsed.regions) ? parsed.regions : []).find((item: any) => stringValue(item.name) === options.region);
-      const zone = (Array.isArray(region?.availabilityZones) ? region.availabilityZones : [])
-        .find((item: any) => stringValue(item.state).toLowerCase() !== "unavailable");
-      if (zone?.zoneName) return String(zone.zoneName);
-    } catch {
-      return `${options.region}a`;
-    }
+  const regions = await runAws(options, ["lightsail", "get-regions", "--include-availability-zones"]);
+  const parsed = parseJsonObject(regions.stdout);
+  const zone = selectLightsailAvailabilityZone(parsed, options.region);
+  if (!zone) {
+    throw new Error(`no available Lightsail availability zone found for region ${options.region}`);
   }
-  return `${options.region}a`;
+  return zone;
+}
+
+function selectLightsailAvailabilityZone(data: Record<string, any>, regionName: string): string {
+  return inspectLightsailAvailabilityFromRegions(data, regionName).selected_zone;
+}
+
+function inspectLightsailAvailabilityFromRegions(data: Record<string, any>, regionName: string): LightsailAvailabilityInspection {
+  const defaultZone = defaultLightsailAvailabilityZone(regionName);
+  const region = (Array.isArray(data.regions) ? data.regions : []).find((item: any) => stringValue(item.name) === regionName);
+  if (!region) {
+    return {
+      status: "unavailable",
+      default_zone: defaultZone,
+      selected_zone: "",
+      available_zones: [],
+      unavailable_zones: [],
+      reason: `Lightsail region ${regionName} was not returned by get-regions`
+    };
+  }
+  const allZones = Array.isArray(region.availabilityZones) ? region.availabilityZones : [];
+  const availableZones = allZones
+    .filter((item: any) => stringValue(item.zoneName) && stringValue(item.state).toLowerCase() !== "unavailable");
+  const unavailableZones = allZones
+    .filter((item: any) => stringValue(item.zoneName) && stringValue(item.state).toLowerCase() === "unavailable")
+    .map((item: any) => stringValue(item.zoneName));
+  const defaultAvailable = availableZones.find((item: any) => stringValue(item.zoneName) === defaultZone);
+  const selectedZone = stringValue(defaultAvailable?.zoneName || availableZones[0]?.zoneName);
+  return {
+    status: selectedZone ? "available" : "unavailable",
+    default_zone: defaultZone,
+    selected_zone: selectedZone,
+    available_zones: availableZones.map((item: any) => stringValue(item.zoneName)),
+    unavailable_zones: unavailableZones,
+    reason: selectedZone
+      ? selectedZone === defaultZone
+        ? ""
+        : `default Lightsail zone ${defaultZone} is unavailable; selected ${selectedZone}`
+      : `no available Lightsail availability zone found for region ${regionName}`
+  };
+}
+
+function defaultLightsailAvailabilityZone(regionName: string): string {
+  return `${regionName}${process.env.DIREXIO_LIGHTSAIL_DEFAULT_ZONE_SUFFIX || "a"}`;
 }
 
 async function openLightsailPorts(options: DeployOptions, instanceName: string): Promise<void> {

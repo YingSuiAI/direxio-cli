@@ -10,7 +10,8 @@ Unified local product surface for deploying Direxio, wiring the Matrix agent bri
 direxio onboard aws
 direxio aws import-csv <aws-access-key.csv> --profile direxio-deployer --region <aws-region>
 direxio aws verify --profile direxio-deployer
-direxio deploy --service <service-id> --domain <domain> --region <aws-region> --cloud lightsail --dns auto --agent-install auto --confirm-domain
+direxio deploy --service <service-id> --domain <domain> --region <aws-region> --dns auto --agent-install auto --confirm-domain
+direxio deploy --service <service-id> --domain <domain> --region <aws-region> --cloud <confirmed-cloud> --dns auto --agent-install auto --confirm-domain --confirm-deploy
 direxio status --service <service-id>
 direxio update --service <service-id>
 direxio reset-app-data --service <service-id> --confirm
@@ -29,7 +30,9 @@ direxio confirm app-initialization --service <service-id> --evidence "user compl
 direxio skill install --agent codex
 ```
 
-Deploy uses `--cloud lightsail` by default, selecting the Lightsail $12/month Linux bundle when available. Use `--cloud ec2` only when EC2-specific networking or instance controls are required; new EC2 deployments use a 50 GiB gp3 root EBS volume by default. `--dns auto` is also the default: if the AWS account has a matching public Route53 hosted zone, `direxio` writes the A record there; otherwise it records the required user-managed DNS A record and exits with code `2` until the domain resolves to the fixed public IP. `--agent-install auto` installs and verifies connect/MCP by default; `recommend` writes files and next commands; `skip` writes credentials/config only.
+Deploy first prints a confirmation checklist and exits with code `2` unless `--confirm-deploy` or `--yes` is present. The checklist queries AWS Free Tier, Lightsail bundles, and Lightsail availability zones before selecting a cloud. Lightsail is the default and uses the $12/month Linux bundle; if the default Lightsail AZ is unavailable, another available Lightsail AZ is selected. If Lightsail has no usable bundle or AZ in the region, the checklist selects EC2 and the confirm command includes `--cloud ec2`.
+
+Use `--cloud ec2` only when EC2-specific networking or instance controls are required, or when the confirmation checklist selected it. New EC2 deployments use a 50 GiB gp3 root EBS volume by default. `--dns auto` is also the default: if the AWS account has a matching public Route53 hosted zone, `direxio` writes the A record there; otherwise it records the required user-managed DNS A record and exits with code `2` until the domain resolves to the fixed public IP. `--agent-install auto` installs and verifies connect/MCP by default; `recommend` writes files and next commands; `skip` writes credentials/config only.
 
 Agent compatibility is implemented through built-in provider plugins. `direxio agents list` shows each provider's skill path, connect type, MCP config files, and required local binaries. `direxio agents check --agent <provider>` and `direxio verify runtime` probe the selected provider's executable dependencies before claiming the runtime is usable. Supported providers are `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
 

@@ -359,6 +359,7 @@ describe("deploy operation", () => {
         instance_id: "direxio-lightsail-example-test",
         lightsail_instance_name: "direxio-lightsail-example-test",
         lightsail_static_ip_name: "direxio-ip-lightsail-example-test",
+        lightsail_availability_zone: "us-east-1a",
         lightsail_ports_configured: "true",
         lightsail_bundle_id: "medium_3_0",
         lightsail_bundle_price_usd: 12,
@@ -379,6 +380,188 @@ describe("deploy operation", () => {
       expect.objectContaining({ command: "aws", args: expect.arrayContaining(["allocate-static-ip", "--static-ip-name", "direxio-ip-lightsail-example-test"]) }),
       expect.objectContaining({ command: "aws", args: expect.arrayContaining(["attach-static-ip", "--static-ip-name", "direxio-ip-lightsail-example-test"]) })
     ]));
+  });
+
+  it("selects an available Lightsail zone when the explicit default zone is unavailable", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-lightsail-zone-"));
+    const serviceId = "lightsail-zone.example.test";
+    const calls: Array<{ command: string; args: string[] }> = [];
+    let getStaticIpCalls = 0;
+
+    await expect(
+      deployService({
+        homeDir: home,
+        serviceId,
+        domain: serviceId,
+        region: "us-east-1",
+        domainMode: "user",
+        agentInstallMode: "skip",
+        confirmDomainBinding: true,
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+          if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-bundles") {
+            return { stdout: JSON.stringify({ bundles: [{ bundleId: "medium_3_0", price: 12, ramSizeInGb: 2, diskSizeInGb: 60, supportedPlatforms: ["LINUX_UNIX"] }] }), stderr: "", exitCode: 0 };
+          }
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-regions") {
+            return {
+              stdout: JSON.stringify({
+                regions: [
+                  {
+                    name: "us-east-1",
+                    availabilityZones: [
+                      { zoneName: "us-east-1a", state: "unavailable" },
+                      { zoneName: "us-east-1b", state: "available" }
+                    ]
+                  }
+                ]
+              }),
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-static-ip") {
+            getStaticIpCalls += 1;
+            if (getStaticIpCalls === 1) return { stdout: "", stderr: "NotFoundException", exitCode: 255 };
+            return { stdout: JSON.stringify({ staticIp: { ipAddress: "203.0.113.131" } }), stderr: "", exitCode: 0 };
+          }
+          return { stdout: "{}", stderr: "", exitCode: 0 };
+        },
+        dnsResolver: {
+          resolve4: async () => []
+        }
+      })
+    ).rejects.toThrow("waiting for DNS A record lightsail-zone.example.test ->");
+
+    const createInstances = calls.find((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "lightsail" && normalizedAwsArgs(call.args)[1] === "create-instances");
+    expect(createInstances?.args).toEqual(expect.arrayContaining(["--availability-zone", "us-east-1b"]));
+    const state = JSON.parse(readFileSync(join(home, ".direxio", "nodes", serviceId, "state.json"), "utf8"));
+    expect(state.resources.lightsail_availability_zone).toBe("us-east-1b");
+  });
+
+  it("does not silently switch a confirmed Lightsail deploy to EC2 when no Lightsail zone is available", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-lightsail-no-zone-"));
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await expect(
+      deployService({
+        homeDir: home,
+        serviceId: "no-zone.example.test",
+        domain: "no-zone.example.test",
+        region: "us-east-1",
+        cloud: "lightsail",
+        domainMode: "user",
+        agentInstallMode: "skip",
+        confirmDomainBinding: true,
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+          if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-bundles") {
+            return { stdout: JSON.stringify({ bundles: [{ bundleId: "medium_3_0", price: 12, ramSizeInGb: 2, diskSizeInGb: 60, supportedPlatforms: ["LINUX_UNIX"] }] }), stderr: "", exitCode: 0 };
+          }
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-regions") {
+            return {
+              stdout: JSON.stringify({
+                regions: [
+                  {
+                    name: "us-east-1",
+                    availabilityZones: [
+                      { zoneName: "us-east-1a", state: "unavailable" },
+                      { zoneName: "us-east-1b", state: "unavailable" }
+                    ]
+                  }
+                ]
+              }),
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          return { stdout: "{}", stderr: "", exitCode: 0 };
+        }
+      })
+    ).rejects.toThrow("no available Lightsail availability zone found for region us-east-1");
+
+    expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "ec2")).toBe(false);
+    expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "lightsail" && normalizedAwsArgs(call.args)[1] === "create-instances")).toBe(false);
+  });
+
+  it("does not implicitly resume EC2 state when the deploy request uses the default cloud", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-existing-ec2-default-"));
+    const serviceId = "existing-ec2.example.test";
+    const serviceDir = join(home, ".direxio", "nodes", serviceId);
+    const keyFile = join(serviceDir, "direxio-existing-ec2.pem");
+    const calls: Array<{ command: string; args: string[] }> = [];
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(keyFile, "PRIVATE_KEY", "utf8");
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        run_id: "direxio-existing-ec2",
+        region: "us-east-1",
+        domain_mode: "user",
+        domain: serviceId,
+        phases: {},
+        resources: {
+          ami_id: "ami-existing-ec2",
+          sg_id: "sg-existing-ec2",
+          key_name: "direxio-existing-ec2",
+          key_file: keyFile,
+          instance_id: "i-existing-ec2",
+          root_volume_id: "vol-existing-ec2",
+          eip_id: "eipalloc-existing-ec2",
+          public_ip: "203.0.113.72"
+        }
+      }),
+      "utf8"
+    );
+
+    await expect(
+      deployService({
+        homeDir: home,
+        serviceId,
+        domain: serviceId,
+        region: "us-east-1",
+        agent: "codex",
+        agentInstallMode: "skip",
+        confirmDomainBinding: true,
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+          if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+          if (command === "ssh") {
+            return {
+              stdout: JSON.stringify({
+                password: "12345678",
+                access_token: "owner-secret",
+                agent_token: "agent-secret",
+                agent_room_id: `!agents:${serviceId}`
+              }),
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+        fetch: async (input) => {
+          if (String(input) === `https://${serviceId}/healthz`) {
+            return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+          }
+          return new Response(JSON.stringify({
+            access_token: "matrix-token",
+            device_id: "DEVEXISTING",
+            user_id: `@agent:${serviceId}`,
+            homeserver: `https://${serviceId}`
+          }), { status: 200 });
+        },
+        dnsResolver: {
+          resolve4: async () => ["203.0.113.72"]
+        }
+      })
+    ).rejects.toThrow("state is bound to cloud_provider=ec2; refusing requested cloud_provider=lightsail");
+
+    expect(calls.some((call) => call.command === "ssh")).toBe(false);
   });
 
   it("resumes from recorded AWS resources without creating duplicates", async () => {
@@ -417,6 +600,7 @@ describe("deploy operation", () => {
       serviceId: "resume.example.test",
       domain: "resume.example.test",
       region: "us-west-2",
+      cloud: "ec2",
       agent: "codex",
       mcpTarget: "codex",
       confirmDomainBinding: true,
@@ -805,6 +989,7 @@ describe("deploy operation", () => {
         serviceId,
         domain: serviceId,
         region: "us-east-1",
+        cloud: "ec2",
         agent: "codex",
         mcpTarget: "codex",
         confirmDomainBinding: true,
@@ -914,6 +1099,7 @@ async function runDeploymentWithLocalInstallMode(mode: "recommend" | "skip", age
     serviceId,
     domain: serviceId,
     region: "us-east-1",
+    cloud: "ec2",
     agent,
     agentInstallMode: mode,
     confirmDomainBinding: true,

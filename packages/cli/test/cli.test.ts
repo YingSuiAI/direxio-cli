@@ -600,6 +600,196 @@ describe("direxio CLI", () => {
     expect(readFileSync(join(home, ".codex", "skills", "direxio", "SKILL.md"), "utf8")).toContain("direxio mcp");
   });
 
+  it("prints a deploy confirmation checklist before creating cloud resources", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-plan-"));
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    const code = await runCli(
+      [
+        "deploy",
+        "--service",
+        "plan.example.test",
+        "--domain",
+        "plan.example.test",
+        "--region",
+        "us-east-1",
+        "--confirm-domain",
+        "--json"
+      ],
+      {
+        homeDir: home,
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          const awsArgs = command === "aws" && args[0] === "--region" ? args.slice(2) : args;
+          if (command === "aws" && awsArgs[0] === "freetier") {
+            return {
+              stdout: JSON.stringify({
+                freeTierUsages: [
+                  {
+                    service: "Amazon Lightsail",
+                    actualUsageAmount: 25,
+                    limit: 750,
+                    unit: "Hrs"
+                  }
+                ]
+              }),
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-regions") {
+            return {
+              stdout: JSON.stringify({
+                regions: [
+                  {
+                    name: "us-east-1",
+                    availabilityZones: [{ zoneName: "us-east-1a", state: "available" }]
+                  }
+                ]
+              }),
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-bundles") {
+            return {
+              stdout: JSON.stringify({
+                bundles: [
+                  {
+                    bundleId: "medium_3_0",
+                    price: 12,
+                    ramSizeInGb: 2,
+                    diskSizeInGb: 60,
+                    supportedPlatforms: ["LINUX_UNIX"]
+                  }
+                ]
+              }),
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          return { stdout: "{}", stderr: "", exitCode: 0 };
+        }
+      }
+    );
+
+    expect(code).toBe(2);
+    expect(stderr).toEqual([]);
+    const plan = JSON.parse(stdout.join("\n"));
+    expect(plan).toMatchObject({
+      ok: false,
+      operation: "deploy",
+      status: "confirmation_required",
+      service_id: "plan.example.test",
+      domain: "plan.example.test",
+      region: "us-east-1",
+      selected_cloud: "lightsail",
+      selected_cloud_source: "default",
+      recommended_cloud: "lightsail",
+      choices: {
+        cloud: ["lightsail", "ec2"],
+        dns: ["auto", "route53", "user"],
+        agent_install: ["auto", "recommend", "skip"]
+      },
+      aws_free_tier: {
+        status: "queried"
+      }
+    });
+    expect(plan.checklist).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "cloud", selected: "lightsail", choices: ["lightsail", "ec2"] }),
+      expect.objectContaining({ id: "lightsail_bundle", selected: "$12/month Linux/Unix bundle" }),
+      expect.objectContaining({ id: "lightsail_availability_zone", selected: "us-east-1a" }),
+      expect.objectContaining({ id: "dns", selected: "auto" }),
+      expect.objectContaining({ id: "local_install", selected: "auto" })
+    ]));
+    expect(plan.confirm_command).toContain("--confirm-deploy");
+    expect(calls.some((call) => call.command === "aws" && call.args.includes("create-instances"))).toBe(false);
+    expect(calls.some((call) => call.command === "aws" && call.args.includes("run-instances"))).toBe(false);
+  });
+
+  it("selects EC2 in the deploy confirmation checklist when Lightsail has no available zone", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-plan-ec2-"));
+    const stdout: string[] = [];
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    const code = await runCli(
+      [
+        "deploy",
+        "--service",
+        "plan-ec2.example.test",
+        "--domain",
+        "plan-ec2.example.test",
+        "--region",
+        "us-east-1",
+        "--confirm-domain",
+        "--json"
+      ],
+      {
+        homeDir: home,
+        stdout: (line) => stdout.push(line),
+        stderr: () => {},
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          const awsArgs = command === "aws" && args[0] === "--region" ? args.slice(2) : args;
+          if (command === "aws" && awsArgs[0] === "freetier") return { stdout: JSON.stringify({ freeTierUsages: [] }), stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-bundles") {
+            return {
+              stdout: JSON.stringify({
+                bundles: [{ bundleId: "medium_3_0", price: 12, ramSizeInGb: 2, diskSizeInGb: 60, supportedPlatforms: ["LINUX_UNIX"] }]
+              }),
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-regions") {
+            return {
+              stdout: JSON.stringify({
+                regions: [
+                  {
+                    name: "us-east-1",
+                    availabilityZones: [
+                      { zoneName: "us-east-1a", state: "unavailable" },
+                      { zoneName: "us-east-1b", state: "unavailable" }
+                    ]
+                  }
+                ]
+              }),
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          return { stdout: "{}", stderr: "", exitCode: 0 };
+        }
+      }
+    );
+
+    expect(code).toBe(2);
+    const plan = JSON.parse(stdout.join("\n"));
+    expect(plan).toMatchObject({
+      status: "confirmation_required",
+      selected_cloud: "ec2",
+      selected_cloud_source: "availability",
+      recommended_cloud: "ec2",
+      availability: {
+        lightsail: {
+          status: "unavailable",
+          availability_zone: {
+            status: "unavailable",
+            default_zone: "us-east-1a",
+            available_zones: []
+          }
+        }
+      }
+    });
+    expect(plan.confirm_command).toContain("--cloud ec2");
+    expect(calls.some((call) => call.command === "aws" && call.args.includes("create-instances"))).toBe(false);
+    expect(calls.some((call) => call.command === "aws" && call.args.includes("run-instances"))).toBe(false);
+  });
+
   it("routes deploy through the deployment state machine", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
     const stdout: string[] = [];
@@ -616,6 +806,7 @@ describe("direxio CLI", () => {
         "--region",
         "ap-northeast-1",
         "--confirm-domain",
+        "--confirm-deploy",
         "--json"
       ],
       {
@@ -683,6 +874,7 @@ describe("direxio CLI", () => {
         "--dns",
         "user",
         "--confirm-domain",
+        "--confirm-deploy",
         "--json"
       ],
       {

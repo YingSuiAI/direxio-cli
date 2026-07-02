@@ -4,7 +4,14 @@ import { checkAgentProvider } from "./agents/check.js";
 import { listAgentProviderSummaries } from "./agents/registry.js";
 import { importAwsCsvCredentials, onboardAws, verifyAwsProfile } from "./aws-credentials.js";
 import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
-import { deployService, type AgentInstallMode, type CloudProvider, type DnsResolver, type DomainMode } from "./deploy.js";
+import {
+  buildDeployConfirmationPlan,
+  deployService,
+  type AgentInstallMode,
+  type CloudProvider,
+  type DnsResolver,
+  type DomainMode
+} from "./deploy.js";
 import { destroyService } from "./destroy.js";
 import { installMcpTarget } from "./mcp-config.js";
 import {
@@ -96,24 +103,51 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
       return await runSkill(rest, runtime, stdout);
     }
     if (command === "deploy") {
+      const cloudSelection = cloudProviderSelection(rest);
+      const deployConfirmed = rest.includes("--confirm-deploy") || rest.includes("--yes") || process.env.DIREXIO_CONFIRM_DEPLOY === "1";
+      const domainConfirmed = rest.includes("--confirm-domain") || rest.includes("--yes") || process.env.CONFIRM_DOMAIN_BINDING === "1";
+      const deployOptions = {
+        homeDir: runtime.homeDir,
+        serviceId: optionValue(rest, "--service") ?? optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
+        domain: optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
+        region: optionValue(rest, "--region") ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "",
+        cloud: cloudSelection.value,
+        domainMode: domainModeValue(rest),
+        agent: optionValue(rest, "--agent") ?? process.env.DIREXIO_CONNECT_AGENT ?? "codex",
+        agentInstallMode: agentInstallModeValue(rest),
+        mcpTarget: optionValue(rest, "--mcp-target") ?? optionValue(rest, "--target"),
+        workspace: optionValue(rest, "--workspace"),
+        confirmDomainBinding: domainConfirmed,
+        confirmDnsOverwrite: rest.includes("--confirm-dns-overwrite") || process.env.DIREXIO_CONFIRM_DNS_OVERWRITE === "1" || process.env.CONFIRM_DNS_OVERWRITE === "1",
+        runner: runtime.runner,
+        fetch: runtime.fetch,
+        dnsResolver: runtime.dnsResolver
+      };
+      if (!deployConfirmed) {
+        const plan = await buildDeployConfirmationPlan({
+          ...deployOptions,
+          selectedCloudSource: cloudSelection.source
+        });
+        plan.confirm_command = deployConfirmCommand(rest, {
+          ...deployOptions,
+          cloud: plan.selected_cloud
+        });
+        printValue(
+          plan,
+          rest.includes("--json"),
+          stdout
+        );
+        return 2;
+      }
+      if (cloudSelection.source === "default") {
+        const plan = await buildDeployConfirmationPlan({
+          ...deployOptions,
+          selectedCloudSource: "default"
+        });
+        deployOptions.cloud = plan.selected_cloud;
+      }
       printValue(
-        await deployService({
-          homeDir: runtime.homeDir,
-          serviceId: optionValue(rest, "--service") ?? optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
-          domain: optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
-          region: optionValue(rest, "--region") ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "",
-          cloud: cloudProviderValue(rest),
-          domainMode: domainModeValue(rest),
-          agent: optionValue(rest, "--agent") ?? process.env.DIREXIO_CONNECT_AGENT ?? "codex",
-          agentInstallMode: agentInstallModeValue(rest),
-          mcpTarget: optionValue(rest, "--mcp-target") ?? optionValue(rest, "--target"),
-          workspace: optionValue(rest, "--workspace"),
-          confirmDomainBinding: rest.includes("--confirm-domain") || process.env.CONFIRM_DOMAIN_BINDING === "1",
-          confirmDnsOverwrite: rest.includes("--confirm-dns-overwrite") || process.env.DIREXIO_CONFIRM_DNS_OVERWRITE === "1" || process.env.CONFIRM_DNS_OVERWRITE === "1",
-          runner: runtime.runner,
-          fetch: runtime.fetch,
-          dnsResolver: runtime.dnsResolver
-        }),
+        await deployService(deployOptions),
         rest.includes("--json"),
         stdout
       );
@@ -328,17 +362,64 @@ function agentInstallModeValue(argv: string[]): AgentInstallMode | undefined {
   throw new Error(`unknown agent install mode: ${value}`);
 }
 
-function cloudProviderValue(argv: string[]): CloudProvider | undefined {
-  const value = optionValue(argv, "--cloud") ?? process.env.DIREXIO_CLOUD_PROVIDER ?? process.env.DIREXIO_DEPLOY_PROVIDER;
-  if (!value) return undefined;
+function cloudProviderSelection(argv: string[]): { value: CloudProvider; source: "cli" | "env" | "default" } {
+  const cliValue = optionValue(argv, "--cloud");
+  if (cliValue) return { value: normalizeCloudProviderFlag(cliValue), source: "cli" };
+  const envValue = process.env.DIREXIO_CLOUD_PROVIDER ?? process.env.DIREXIO_DEPLOY_PROVIDER;
+  if (envValue) return { value: normalizeCloudProviderFlag(envValue), source: "env" };
+  return { value: "lightsail", source: "default" };
+}
+
+function normalizeCloudProviderFlag(value: string): CloudProvider {
   const normalized = value.trim().toLowerCase();
   if (normalized === "lightsail" || normalized === "ec2") return normalized;
   throw new Error(`unknown cloud provider: ${value}`);
 }
 
+function deployConfirmCommand(
+  argv: string[],
+  options: {
+    serviceId: string;
+    domain: string;
+    region: string;
+    cloud: CloudProvider;
+    domainMode?: DomainMode;
+    agent?: string;
+    agentInstallMode?: AgentInstallMode;
+    mcpTarget?: string;
+    workspace?: string;
+    confirmDnsOverwrite?: boolean;
+  }
+): string {
+  const args = ["direxio", "deploy"];
+  appendOption(args, "--service", options.serviceId);
+  appendOption(args, "--domain", options.domain);
+  appendOption(args, "--region", options.region);
+  appendOption(args, "--cloud", options.cloud);
+  appendOption(args, "--dns", options.domainMode);
+  appendOption(args, "--agent", options.agent);
+  appendOption(args, "--agent-install", options.agentInstallMode);
+  appendOption(args, "--mcp-target", options.mcpTarget);
+  appendOption(args, "--workspace", options.workspace);
+  if (!argv.includes("--confirm-domain")) args.push("--confirm-domain");
+  if (options.confirmDnsOverwrite && !argv.includes("--confirm-dns-overwrite")) args.push("--confirm-dns-overwrite");
+  args.push("--confirm-deploy");
+  return args.map(shellArg).join(" ");
+}
+
+function appendOption(args: string[], name: string, value: string | undefined): void {
+  if (!value) return;
+  args.push(name, value);
+}
+
+function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:@=-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function usage(): string {
   return `Usage:
-  direxio deploy [--cloud lightsail|ec2] [--dns auto|user|route53] [--agent-install auto|recommend|skip]
+  direxio deploy [--cloud lightsail|ec2] [--dns auto|user|route53] [--agent-install auto|recommend|skip] [--confirm-deploy|--yes]
   direxio status|destroy|update|reset-app-data
   direxio onboard aws
   direxio aws <import-csv|verify>
