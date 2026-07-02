@@ -40,5 +40,24 @@ direxio skill install --agent codex
 
 Agent support is provider-plugin based. `direxio agents list` prints the provider-owned skill path, connect type, MCP snippets, and required binaries. `direxio agents check --agent <provider>` probes the selected provider executable before runtime verification claims the local agent side is usable. Supported providers: `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
 
+## Agent Skill Bootstrap
+
+Paste this single instruction into an agent when you want it to install Direxio support for its own runtime:
+
+```text
+Install the Direxio skill for this agent: run `npx -y @direxio/cli@latest agents list --json`, choose the provider that matches this runtime, then run `npx -y @direxio/cli@latest skill install --agent <provider> --json` and read the generated `SKILL.md` before using Direxio.
+```
+
+Use only the current agent provider, not every provider. Common provider values:
+
+```bash
+npx -y @direxio/cli@latest skill install --agent codex --json
+npx -y @direxio/cli@latest skill install --agent cursor --json
+npx -y @direxio/cli@latest skill install --agent gemini --json
+npx -y @direxio/cli@latest skill install --agent claudecode --json
+```
+
+If `direxio` is already installed globally, the equivalent command is `direxio skill install --agent <provider> --json`. MCP client snippets are service-scoped and should be installed after a service exists with `direxio mcp install --service <service-id> --target <provider>`.
+
 `direxio` is the orchestration CLI. The long-running bridge stays in
 `direxio-connect`, and MCP protocol serving stays in `direxio-mcp`.

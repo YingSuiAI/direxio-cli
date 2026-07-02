@@ -33,6 +33,25 @@ Deploy uses `--dns auto` by default: if the AWS account has a matching public Ro
 
 Agent compatibility is implemented through built-in provider plugins. `direxio agents list` shows each provider's skill path, connect type, MCP config files, and required local binaries. `direxio agents check --agent <provider>` and `direxio verify runtime` probe the selected provider's executable dependencies before claiming the runtime is usable. Supported providers are `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
 
+## Agent Skill Bootstrap
+
+Paste this single instruction into an agent when you want it to install Direxio support for its own runtime:
+
+```text
+Install the Direxio skill for this agent: run `npx -y @direxio/cli@latest agents list --json`, choose the provider that matches this runtime, then run `npx -y @direxio/cli@latest skill install --agent <provider> --json` and read the generated `SKILL.md` before using Direxio.
+```
+
+Use only the current agent provider, not every provider. Common provider values:
+
+```bash
+npx -y @direxio/cli@latest skill install --agent codex --json
+npx -y @direxio/cli@latest skill install --agent cursor --json
+npx -y @direxio/cli@latest skill install --agent gemini --json
+npx -y @direxio/cli@latest skill install --agent claudecode --json
+```
+
+If `direxio` is already installed globally, the equivalent command is `direxio skill install --agent <provider> --json`. MCP client snippets are service-scoped and should be installed after a service exists with `direxio mcp install --service <service-id> --target <provider>`.
+
 Internally, the product keeps deep modules:
 
 - `packages/cli`: TypeScript orchestration CLI, deployment state, reports, paths, and skill commands.
