@@ -529,6 +529,78 @@ describe("deploy operation", () => {
     expect(state.deploy_error).toContain("healthz did not return 200 before timeout");
   });
 
+  it("falls back to public recursive DNS when the local Node resolver refuses queries", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-dns-fallback-"));
+    const serviceId = "dns-fallback.example.test";
+    const serviceDir = join(home, ".direxio", "nodes", serviceId);
+    const keyFile = join(serviceDir, "direxio-dns-fallback.pem");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(keyFile, "PRIVATE_KEY", "utf8");
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        run_id: "direxio-dns-fallback",
+        region: "us-east-1",
+        cloud_provider: "ec2",
+        domain_mode: "user",
+        domain: serviceId,
+        phases: {},
+        resources: {
+          ami_id: "ami-dns-fallback",
+          sg_id: "sg-dns-fallback",
+          key_name: "direxio-dns-fallback",
+          key_file: keyFile,
+          instance_id: "i-dns-fallback",
+          root_volume_id: "vol-dns-fallback",
+          eip_id: "eipalloc-dns-fallback",
+          public_ip: "203.0.113.69"
+        }
+      }),
+      "utf8"
+    );
+
+    await deployService({
+      homeDir: home,
+      serviceId,
+      domain: serviceId,
+      region: "us-east-1",
+      cloud: "ec2",
+      agentInstallMode: "skip",
+      confirmDomainBinding: true,
+      runner: async (command, args) => {
+        const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+        if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+        if (command === "ssh") return { stdout: `{"password":"12345678","access_token":"owner","agent_token":"agent","agent_room_id":"!agents:${serviceId}"}`, stderr: "", exitCode: 0 };
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      fetch: async (input) => {
+        if (String(input) === `https://${serviceId}/healthz`) {
+          return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+        }
+        return new Response(JSON.stringify({
+          access_token: "matrix-token",
+          device_id: "DEVDNS",
+          user_id: `@agent:${serviceId}`,
+          homeserver: `https://${serviceId}`
+        }), { status: 200 });
+      },
+      dnsResolver: {
+        resolveNs: async () => {
+          throw new Error("ECONNREFUSED");
+        },
+        resolve4: async () => {
+          throw new Error("ECONNREFUSED");
+        },
+        resolve4At: async (server) => (server === "1.1.1.1" ? ["203.0.113.69"] : [])
+      }
+    });
+
+    expect(JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"))).toMatchObject({
+      dns_ready: true,
+      phase: "S7_VERIFY_E2E"
+    });
+  });
+
   it("does not silently switch a confirmed Lightsail deploy to EC2 when no Lightsail zone is available", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-lightsail-no-zone-"));
     const calls: Array<{ command: string; args: string[] }> = [];

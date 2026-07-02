@@ -1534,6 +1534,8 @@ const defaultDnsResolver: DnsResolver = {
   }
 };
 
+const PUBLIC_RECURSIVE_DNS_SERVERS = ["1.1.1.1", "8.8.8.8"];
+
 const LIGHTSAIL_FREE_TIER_NOTE = "Amazon Lightsail currently offers three months free on select eligible bundles for each AWS account/user; verify Free Tier eligibility before relying on it because standard charges apply after the eligible allowance or when the account is not eligible.";
 
 function emitProgress(
@@ -1565,6 +1567,15 @@ async function domainResolvesToIp(resolver: DnsResolver, domain: string, ip: str
   try {
     return (await resolver.resolve4(domain)).includes(ip);
   } catch {
+    if (resolver.resolve4At) {
+      for (const server of PUBLIC_RECURSIVE_DNS_SERVERS) {
+        try {
+          if ((await resolver.resolve4At(server, domain)).includes(ip)) return true;
+        } catch {
+          continue;
+        }
+      }
+    }
     return false;
   }
 }
