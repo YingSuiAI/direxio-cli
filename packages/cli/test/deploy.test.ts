@@ -305,7 +305,10 @@ describe("deploy operation", () => {
           };
         }
         if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "create-key-pair") {
-          return { stdout: JSON.stringify({ name: "direxio-key-lightsail-example-test", privateKeyBase64: Buffer.from("PRIVATE_KEY").toString("base64") }), stderr: "", exitCode: 0 };
+          return { stdout: JSON.stringify({ name: "direxio-key-lightsail-example-test", privateKeyBase64: "-----BEGIN RSA PRIVATE KEY-----\nLIGHTSAIL_KEY\n-----END RSA PRIVATE KEY-----\n" }), stderr: "", exitCode: 0 };
+        }
+        if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-instance") {
+          return { stdout: JSON.stringify({ instance: { state: { name: "running" } } }), stderr: "", exitCode: 0 };
         }
         if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-static-ip") {
           getStaticIpCalls += 1;
@@ -373,7 +376,12 @@ describe("deploy operation", () => {
       provider: "lightsail",
       total_monthly_usd: 12
     });
+    expect(state.billing_warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining("three months free")
+    ]));
+    expect(readFileSync(join(serviceDir, "direxio-key-lightsail-example-test.pem"), "utf8")).toBe("-----BEGIN RSA PRIVATE KEY-----\nLIGHTSAIL_KEY\n-----END RSA PRIVATE KEY-----\n");
     expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "lightsail" && normalizedAwsArgs(call.args)[1] === "create-instances")).toBe(true);
+    expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "lightsail" && normalizedAwsArgs(call.args)[1] === "get-instance")).toBe(true);
     expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "ec2" && normalizedAwsArgs(call.args)[1] === "run-instances")).toBe(false);
     expect(calls).toEqual(expect.arrayContaining([
       expect.objectContaining({ command: "aws", args: expect.arrayContaining(["open-instance-public-ports", "--port-info", "fromPort=49160,toPort=49200,protocol=udp"]) }),
@@ -426,6 +434,9 @@ describe("deploy operation", () => {
             if (getStaticIpCalls === 1) return { stdout: "", stderr: "NotFoundException", exitCode: 255 };
             return { stdout: JSON.stringify({ staticIp: { ipAddress: "203.0.113.131" } }), stderr: "", exitCode: 0 };
           }
+          if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-instance") {
+            return { stdout: JSON.stringify({ instance: { state: { name: "running" } } }), stderr: "", exitCode: 0 };
+          }
           return { stdout: "{}", stderr: "", exitCode: 0 };
         },
         dnsResolver: {
@@ -438,6 +449,84 @@ describe("deploy operation", () => {
     expect(createInstances?.args).toEqual(expect.arrayContaining(["--availability-zone", "us-east-1b"]));
     const state = JSON.parse(readFileSync(join(home, ".direxio", "nodes", serviceId, "state.json"), "utf8"));
     expect(state.resources.lightsail_availability_zone).toBe("us-east-1b");
+  });
+
+  it("fails health polling with deploy progress and state evidence instead of hanging silently", async () => {
+    const previousMax = process.env.DIREXIO_HEALTH_POLL_MAX;
+    const previousInterval = process.env.DIREXIO_HEALTH_POLL_INTERVAL_MS;
+    process.env.DIREXIO_HEALTH_POLL_MAX = "2";
+    process.env.DIREXIO_HEALTH_POLL_INTERVAL_MS = "1";
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-health-timeout-"));
+    const serviceId = "health-timeout.example.test";
+    const serviceDir = join(home, ".direxio", "nodes", serviceId);
+    const keyFile = join(serviceDir, "direxio-health-timeout.pem");
+    const progress: string[] = [];
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(keyFile, "PRIVATE_KEY", "utf8");
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        run_id: "direxio-health-timeout",
+        region: "us-east-1",
+        cloud_provider: "ec2",
+        domain_mode: "user",
+        domain: serviceId,
+        phases: {},
+        resources: {
+          ami_id: "ami-health-timeout",
+          sg_id: "sg-health-timeout",
+          key_name: "direxio-health-timeout",
+          key_file: keyFile,
+          instance_id: "i-health-timeout",
+          root_volume_id: "vol-health-timeout",
+          eip_id: "eipalloc-health-timeout",
+          public_ip: "203.0.113.68"
+        }
+      }),
+      "utf8"
+    );
+
+    try {
+      await expect(
+        deployService({
+          homeDir: home,
+          serviceId,
+          domain: serviceId,
+          region: "us-east-1",
+          cloud: "ec2",
+          agentInstallMode: "skip",
+          confirmDomainBinding: true,
+          onProgress: (event) => progress.push(`${event.phase}:${event.status}:${event.message}`),
+          runner: async (command, args) => {
+            const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+            if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+            return { stdout: "", stderr: "", exitCode: 0 };
+          },
+          fetch: async () => new Response("not ready", { status: 503 }),
+          dnsResolver: {
+            resolve4: async () => ["203.0.113.68"]
+          }
+        })
+      ).rejects.toThrow("healthz did not return 200 before timeout");
+    } finally {
+      restoreEnv("DIREXIO_HEALTH_POLL_MAX", previousMax);
+      restoreEnv("DIREXIO_HEALTH_POLL_INTERVAL_MS", previousInterval);
+    }
+
+    expect(progress).toEqual(expect.arrayContaining([
+      expect.stringContaining("S4_BOOTSTRAP_STACK:waiting:waiting for https://health-timeout.example.test/healthz"),
+      expect.stringContaining("S4_BOOTSTRAP_STACK:failed:healthz did not return 200 before timeout")
+    ]));
+    const state = JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"));
+    expect(state).toMatchObject({
+      phase: "S4_BOOTSTRAP_STACK",
+      phases: {
+        S4_BOOTSTRAP_STACK: {
+          status: "failed"
+        }
+      }
+    });
+    expect(state.deploy_error).toContain("healthz did not return 200 before timeout");
   });
 
   it("does not silently switch a confirmed Lightsail deploy to EC2 when no Lightsail zone is available", async () => {
@@ -689,7 +778,14 @@ describe("deploy operation", () => {
     ).rejects.toThrow("capacity unavailable");
 
     expect(JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"))).toMatchObject({
-      phase: "S2_DOMAIN",
+      phase: "S3_PROVISION",
+      phases: {
+        S3_PROVISION: {
+          status: "failed",
+          detail: "capacity unavailable"
+        }
+      },
+      deploy_error: "capacity unavailable",
       resources: {
         ami_id: "ami-partial",
         sg_id: "sg-partial",
@@ -1058,6 +1154,14 @@ describe("deploy operation", () => {
 
 function normalizedAwsArgs(args: string[]): string[] {
   return args[0] === "--region" ? args.slice(2) : args;
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
 }
 
 async function runDeploymentWithLocalInstallMode(mode: "recommend" | "skip", agent = "codex"): Promise<{

@@ -28,6 +28,7 @@ export interface DeployOptions {
   runner?: CommandRunner;
   fetch?: typeof fetch;
   dnsResolver?: DnsResolver;
+  onProgress?: (event: DeployProgressEvent) => void;
   now?: () => string;
 }
 
@@ -47,6 +48,16 @@ export interface DeployResult {
   domain: string;
   state: string;
   report: string;
+}
+
+export interface DeployProgressEvent {
+  phase: string;
+  status: "running" | "waiting" | "done" | "failed";
+  message: string;
+  attempt?: number;
+  maxAttempts?: number;
+  elapsedMs?: number;
+  nextDelayMs?: number;
 }
 
 export interface DeployConfirmationPlanOptions extends DeployOptions {
@@ -116,7 +127,8 @@ export async function buildDeployConfirmationPlan(options: DeployConfirmationPla
           monthly_usd: DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD,
           ram_gb: DEFAULT_LIGHTSAIL_RAM_GB,
           disk_gb: DEFAULT_LIGHTSAIL_DISK_GB,
-          reason: lightsailBundle.reason
+          reason: lightsailBundle.reason,
+          free_tier_note: LIGHTSAIL_FREE_TIER_NOTE
         }
       },
       {
@@ -261,21 +273,52 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
   const state = loadOrInitializeState(normalizedOptions, context, domain, ts);
   writeServiceState(context, state);
 
+  markPhaseRunning(state, "S0_PREREQ_AWS", ts, "verifying AWS caller identity");
+  writeServiceState(context, state);
+  emitProgress(normalizedOptions, "S0_PREREQ_AWS", "running", "verifying AWS caller identity");
   await runAws(normalizedOptions, ["sts", "get-caller-identity"]);
   markPhaseDone(state, "S0_PREREQ_AWS", ts, "AWS caller identity verified");
+  emitProgress(normalizedOptions, "S0_PREREQ_AWS", "done", "AWS caller identity verified");
+  markPhaseRunning(state, "S1_PREFLIGHT", ts, "checking cloud recommendation, Free Tier usage, Lightsail bundle, and availability zone");
+  writeServiceState(context, state);
+  emitProgress(normalizedOptions, "S1_PREFLIGHT", "running", "checking cloud recommendation, Free Tier usage, Lightsail bundle, and availability zone");
   await recordCloudRecommendation(normalizedOptions, context, state, ts);
   markPhaseDone(state, "S1_PREFLIGHT", ts, `deployment inputs validated; selected_cloud=${state.cloud_provider}`);
+  emitProgress(normalizedOptions, "S1_PREFLIGHT", "done", `deployment inputs validated; selected_cloud=${state.cloud_provider}`);
   markPhaseDone(state, "S2_DOMAIN", ts, "production domain binding confirmed");
+  emitProgress(normalizedOptions, "S2_DOMAIN", "done", "production domain binding confirmed");
   writeServiceState(context, state);
 
-  await provisionAwsResources(normalizedOptions, context, state, domain);
+  markPhaseRunning(state, "S3_PROVISION", ts, "provisioning AWS resources and DNS");
+  writeServiceState(context, state);
+  emitProgress(normalizedOptions, "S3_PROVISION", "running", "provisioning AWS resources and DNS");
+  try {
+    await provisionAwsResources(normalizedOptions, context, state, domain);
+  } catch (error) {
+    if (error && typeof error === "object" && "exitCode" in error && (error as { exitCode?: unknown }).exitCode === 2) {
+      const message = error instanceof Error ? error.message : String(error);
+      emitProgress(normalizedOptions, "S3_PROVISION", "waiting", message);
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    markPhaseFailed(state, "S3_PROVISION", normalizedOptions.now?.() ?? new Date().toISOString(), message);
+    state.deploy_error = message;
+    writeServiceState(context, state);
+    emitProgress(normalizedOptions, "S3_PROVISION", "failed", message);
+    throw error;
+  }
   markPhaseDone(state, "S3_PROVISION", ts, "AWS resources provisioned");
+  emitProgress(normalizedOptions, "S3_PROVISION", "done", "AWS resources provisioned");
   writeServiceState(context, state);
 
-  await waitForHealthz(normalizedOptions, domain);
+  await waitForHealthz(normalizedOptions, context, state, domain);
   markPhaseDone(state, "S4_BOOTSTRAP_STACK", ts, `healthz 200 @ https://${domain}`);
+  emitProgress(normalizedOptions, "S4_BOOTSTRAP_STACK", "done", `healthz 200 @ https://${domain}`);
   writeServiceState(context, state);
 
+  markPhaseRunning(state, "S5_INIT_TOKENS", ts, "collecting bootstrap credentials over SSH");
+  writeServiceState(context, state);
+  emitProgress(normalizedOptions, "S5_INIT_TOKENS", "running", "collecting bootstrap credentials over SSH");
   const bootstrap = await bootstrapRemote(normalizedOptions, state, domain);
   Object.assign(state, {
     password: bootstrap.password,
@@ -285,16 +328,22 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
     as_url: `https://${domain}`
   });
   markPhaseDone(state, "S5_INIT_TOKENS", ts, "bootstrap credentials collected");
+  emitProgress(normalizedOptions, "S5_INIT_TOKENS", "done", "bootstrap credentials collected");
   writeServiceState(context, state);
   writeCredentials(context, domain, bootstrap, state.agent_node_id);
 
+  markPhaseRunning(state, "S6_WIRE_LOCAL", ts, "wiring local credentials, connect, MCP, and runtime verification");
+  writeServiceState(context, state);
+  emitProgress(normalizedOptions, "S6_WIRE_LOCAL", "running", "wiring local credentials, connect, MCP, and runtime verification");
   const matrixSession = await createMatrixSession(normalizedOptions, domain, bootstrap.agent_token, `direxio-connect-${serviceId}`);
   writeLocalWiring(normalizedOptions, context, state, domain, bootstrap, matrixSession, agentProvider);
   const serviceConfig = serviceConfigFromDeploy(context, domain, bootstrap, String(state.agent_node_id));
   const localWiringEvidence = await applyLocalInstallMode(normalizedOptions, context, state, serviceConfig);
   writeServiceState(context, state);
   markPhaseDone(state, "S6_WIRE_LOCAL", ts, localWiringEvidence);
+  emitProgress(normalizedOptions, "S6_WIRE_LOCAL", "done", localWiringEvidence);
   markPhaseDone(state, "S7_VERIFY_E2E", ts, "deployment automation completed");
+  emitProgress(normalizedOptions, "S7_VERIFY_E2E", "done", "deployment automation completed");
 
   writeServiceState(context, state);
   const report = writeOperationReport(
@@ -330,6 +379,7 @@ function initialState(options: DeployOptions, context: ServiceContext, domain: s
     domain_confirmed_irreversible: true,
     billing_warnings: [
       "Lightsail instances, static IPs, EC2, EBS, public IPv4, Elastic IP, and Route53 hosted zones may keep billing until destroy completes.",
+      LIGHTSAIL_FREE_TIER_NOTE,
       "Lightsail static IP, Elastic IP, and public IPv4 charges may continue while allocated or attached.",
       "Route53 hosted zones are billable until deleted; user-owned parent zones and domain registrations are not destroyed by direxio."
     ],
@@ -530,6 +580,7 @@ async function provisionLightsailResources(options: DeployOptions, context: Serv
     writeServiceState(context, state);
   }
   if (String(state.resources.lightsail_ports_configured || "") !== "true") {
+    await waitForLightsailInstanceRunning(options, context, state, String(state.resources.lightsail_instance_name));
     await openLightsailPorts(options, String(state.resources.lightsail_instance_name));
     state.resources.lightsail_ports_configured = "true";
     writeServiceState(context, state);
@@ -682,7 +733,7 @@ async function recordCloudRecommendation(options: DeployOptions, context: Servic
       monthly_usd: DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD,
       ram_gb: DEFAULT_LIGHTSAIL_RAM_GB,
       disk_gb: DEFAULT_LIGHTSAIL_DISK_GB,
-      note: "Default production bundle; select EC2 with --cloud ec2 or DIREXIO_CLOUD_PROVIDER=ec2."
+      note: `Default production bundle; select EC2 with --cloud ec2 or DIREXIO_CLOUD_PROVIDER=ec2. ${LIGHTSAIL_FREE_TIER_NOTE}`
     },
     ec2: {
       instance_type: DEFAULT_EC2_INSTANCE_TYPE,
@@ -930,6 +981,35 @@ async function openLightsailPorts(options: DeployOptions, instanceName: string):
   }
 }
 
+async function waitForLightsailInstanceRunning(
+  options: DeployOptions,
+  context: ServiceContext,
+  state: ServiceState,
+  instanceName: string
+): Promise<void> {
+  const attempts = envInteger("DIREXIO_LIGHTSAIL_INSTANCE_POLL_MAX", 60);
+  const intervalMs = envInteger("DIREXIO_LIGHTSAIL_INSTANCE_POLL_INTERVAL_MS", 5_000);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = parseJsonObject((await runAws(options, ["lightsail", "get-instance", "--instance-name", instanceName])).stdout);
+    const instanceState = stringValue(result.instance?.state?.name || result.instance?.state?.Name || result.state?.name || result.state?.Name);
+    state.resources.lightsail_instance_state = instanceState;
+    writeServiceState(context, state);
+    emitProgress(options, "S3_PROVISION", "waiting", `waiting for Lightsail instance ${instanceName} to be running; current_state=${instanceState || "unknown"}`, {
+      attempt,
+      maxAttempts: attempts,
+      nextDelayMs: attempt < attempts ? intervalMs : 0
+    });
+    if (instanceState.toLowerCase() === "running") return;
+    if (attempt < attempts) await delay(intervalMs);
+  }
+  const message = `Lightsail instance ${instanceName} did not reach running before timeout; run direxio status --service ${state.agent_service_id || state.domain} --json, then retry deploy or destroy the partial service.`;
+  markPhaseFailed(state, "S3_PROVISION", options.now?.() ?? new Date().toISOString(), message);
+  state.deploy_error = message;
+  writeServiceState(context, state);
+  emitProgress(options, "S3_PROVISION", "failed", message);
+  throw new Error(message);
+}
+
 async function lightsailStaticIpExists(options: DeployOptions, staticIpName: string): Promise<boolean> {
   const result = await tryAws(options, ["lightsail", "get-static-ip", "--static-ip-name", staticIpName]);
   return result.exitCode === 0;
@@ -937,8 +1017,19 @@ async function lightsailStaticIpExists(options: DeployOptions, staticIpName: str
 
 function lightsailPrivateKeyMaterial(key: Record<string, any>): string {
   const raw = stringValue(key.privateKeyBase64 || key.PrivateKeyBase64);
-  if (raw) return Buffer.from(raw, "base64").toString("utf8");
+  if (raw) return decodeLightsailPrivateKey(raw);
   return stringValue(key.privateKey || key.PrivateKey || key.KeyMaterial);
+}
+
+function decodeLightsailPrivateKey(raw: string): string {
+  if (looksLikePem(raw)) return raw;
+  if (!/^[A-Za-z0-9+/=\s]+$/.test(raw)) return raw;
+  const decoded = Buffer.from(raw, "base64").toString("utf8");
+  return decoded || raw;
+}
+
+function looksLikePem(value: string): boolean {
+  return value.includes("-----BEGIN ") && value.includes(" PRIVATE KEY-----");
 }
 
 function rootBlockDeviceMappingsJson(): string {
@@ -1157,12 +1248,22 @@ function renderUserData(state: ServiceState, domain: string): string {
   return file;
 }
 
-async function waitForHealthz(options: DeployOptions, domain: string): Promise<void> {
+async function waitForHealthz(options: DeployOptions, context: ServiceContext, state: ServiceState, domain: string): Promise<void> {
   const fetchImpl = options.fetch ?? fetch;
   const attempts = envInteger("DIREXIO_HEALTH_POLL_MAX", 90);
   const intervalMs = envInteger("DIREXIO_HEALTH_POLL_INTERVAL_MS", 10_000);
   let lastError = "";
+  const startedAt = Date.now();
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const detail = `waiting for https://${domain}/healthz (${attempt}/${attempts})`;
+    markPhaseRunning(state, "S4_BOOTSTRAP_STACK", options.now?.() ?? new Date().toISOString(), detail);
+    writeServiceState(context, state);
+    emitProgress(options, "S4_BOOTSTRAP_STACK", "waiting", detail, {
+      attempt,
+      maxAttempts: attempts,
+      elapsedMs: Date.now() - startedAt,
+      nextDelayMs: attempt < attempts ? intervalMs : 0
+    });
     try {
       const response = await fetchImpl(`https://${domain}/healthz`, { method: "GET" });
       if (response.ok) return;
@@ -1174,7 +1275,14 @@ async function waitForHealthz(options: DeployOptions, domain: string): Promise<v
       await delay(intervalMs);
     }
   }
-  throw new Error(`healthz did not return 200 before timeout: https://${domain}/healthz${lastError ? ` (${lastError})` : ""}`);
+  const message = `healthz did not return 200 before timeout: https://${domain}/healthz${lastError ? ` (${lastError})` : ""}. Run direxio status --service ${context.serviceId} --json, check ports 80/443, and inspect the cloud-init or Docker logs on the instance before retrying.`;
+  markPhaseFailed(state, "S4_BOOTSTRAP_STACK", options.now?.() ?? new Date().toISOString(), message);
+  state.deploy_error = message;
+  writeServiceState(context, state);
+  emitProgress(options, "S4_BOOTSTRAP_STACK", "failed", message, {
+    elapsedMs: Date.now() - startedAt
+  });
+  throw new Error(message);
 }
 
 async function bootstrapRemote(options: DeployOptions, state: ServiceState, domain: string): Promise<BootstrapCredentials> {
@@ -1382,6 +1490,16 @@ function markPhaseDone(state: ServiceState, phase: string, ts: string, evidence:
   state.phases[phase] = { status: "done", ts, evidence };
 }
 
+function markPhaseRunning(state: ServiceState, phase: string, ts: string, detail: string): void {
+  state.phase = phase;
+  state.phases[phase] = { status: "running", ts, detail };
+}
+
+function markPhaseFailed(state: ServiceState, phase: string, ts: string, detail: string): void {
+  state.phase = phase;
+  state.phases[phase] = { status: "failed", ts, detail };
+}
+
 function markPhaseWaiting(state: ServiceState, phase: string, ts: string, detail: string): void {
   state.phase = phase;
   state.phases[phase] = { status: "waiting_user", ts, detail };
@@ -1415,6 +1533,18 @@ const defaultDnsResolver: DnsResolver = {
     return await resolver.resolve4(domain);
   }
 };
+
+const LIGHTSAIL_FREE_TIER_NOTE = "Amazon Lightsail currently offers three months free on select eligible bundles for each AWS account/user; verify Free Tier eligibility before relying on it because standard charges apply after the eligible allowance or when the account is not eligible.";
+
+function emitProgress(
+  options: DeployOptions,
+  phase: string,
+  status: DeployProgressEvent["status"],
+  message: string,
+  details: Omit<DeployProgressEvent, "phase" | "status" | "message"> = {}
+): void {
+  options.onProgress?.({ phase, status, message, ...details });
+}
 
 async function domainResolvesToIp(resolver: DnsResolver, domain: string, ip: string): Promise<boolean> {
   const authoritativeServers = await authoritativeNameServers(resolver, domain);

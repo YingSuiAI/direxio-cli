@@ -48,6 +48,19 @@ describe("connect runtime", () => {
     expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
   });
 
+  it("times out a stuck child process through the default runner", async () => {
+    const previous = process.env.DIREXIO_COMMAND_TIMEOUT_MS;
+    process.env.DIREXIO_COMMAND_TIMEOUT_MS = "50";
+    try {
+      const result = await defaultRunner(process.execPath, ["-e", "setTimeout(() => {}, 5000)"]);
+
+      expect(result.exitCode).toBe(124);
+      expect(result.stderr).toContain("timed out after 50ms");
+    } finally {
+      restoreEnv("DIREXIO_COMMAND_TIMEOUT_MS", previous);
+    }
+  });
+
   it("reads daemon status for a service", async () => {
     const { runner, calls } = fakeRunner({
       stdout: "direxio-connect daemon status\n\n  Status:    Running\n  WorkDir:   C:/Users/alice/.direxio/nodes/im/direxio-connect\n"
@@ -236,3 +249,11 @@ describe("connect runtime", () => {
     expect(config.match(/^\s*mode\s*=/gm)).toHaveLength(1);
   });
 });
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}

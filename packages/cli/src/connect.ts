@@ -165,15 +165,30 @@ export function writeConnectConfig(input: ConnectConfigInput): void {
 export const defaultRunner: CommandRunner = (command, args) => {
   return new Promise((resolve) => {
     const executable = resolveExecutable(command);
+    const timeoutMs = envMilliseconds("DIREXIO_COMMAND_TIMEOUT_MS", envSeconds("DIREXIO_COMMAND_TIMEOUT_SECONDS", 600) * 1000);
+    let settled = false;
     const child = spawn(executable, args, {
       shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(executable),
       windowsHide: true
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      resolve({
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: `${command} timed out after ${timeoutMs}ms`,
+        exitCode: 124
+      });
+    }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       resolve({
         stdout: Buffer.concat(stdout).toString("utf8"),
         stderr: Buffer.concat(stderr).toString("utf8"),
@@ -181,6 +196,9 @@ export const defaultRunner: CommandRunner = (command, args) => {
       });
     });
     child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       resolve({
         stdout: "",
         stderr: error.message,
@@ -289,6 +307,11 @@ function envInteger(name: string, fallback: number): number {
 
 function envSeconds(name: string, fallback: number): number {
   return envInteger(name, fallback);
+}
+
+function envMilliseconds(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -9,6 +9,7 @@ import {
   deployService,
   type AgentInstallMode,
   type CloudProvider,
+  type DeployProgressEvent,
   type DnsResolver,
   type DomainMode
 } from "./deploy.js";
@@ -126,7 +127,8 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
         confirmDnsOverwrite: rest.includes("--confirm-dns-overwrite") || process.env.DIREXIO_CONFIRM_DNS_OVERWRITE === "1" || process.env.CONFIRM_DNS_OVERWRITE === "1",
         runner: runtime.runner,
         fetch: runtime.fetch,
-        dnsResolver: runtime.dnsResolver
+        dnsResolver: runtime.dnsResolver,
+        onProgress: (event: DeployProgressEvent) => stderr(formatDeployProgress(event))
       };
       if (!deployConfirmed) {
         const plan = await buildDeployConfirmationPlan({
@@ -330,6 +332,13 @@ function printValue(value: unknown, json: boolean, stdout: (line: string) => voi
   } else {
     stdout(JSON.stringify(value, null, 2));
   }
+}
+
+function formatDeployProgress(event: DeployProgressEvent): string {
+  const attempt = event.attempt && event.maxAttempts ? ` attempt=${event.attempt}/${event.maxAttempts}` : "";
+  const next = event.nextDelayMs && event.nextDelayMs > 0 ? ` next=${Math.ceil(event.nextDelayMs / 1000)}s` : "";
+  const elapsed = typeof event.elapsedMs === "number" && event.elapsedMs > 0 ? ` elapsed=${Math.ceil(event.elapsedMs / 1000)}s` : "";
+  return `[deploy] ${event.phase} ${event.status}: ${event.message}${attempt}${elapsed}${next}`;
 }
 
 function optionValue(argv: string[], name: string): string | undefined {
