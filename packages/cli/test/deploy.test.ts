@@ -78,6 +78,9 @@ describe("deploy operation", () => {
           if (command === "direxio-connect" && args[1] === "logs") {
             return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
           }
+          if (command === "direxio-mcp" && args[1] === "status") {
+            return { stdout: JSON.stringify({ status: "Running" }), stderr: "", exitCode: 0 };
+          }
           return { stdout: "", stderr: "", exitCode: 0 };
         },
         fetch: async (input, init) => {
@@ -91,12 +94,21 @@ describe("deploy operation", () => {
             authorization: new Headers(init?.headers).get("authorization"),
             body: JSON.parse(String(init?.body))
           });
+          if (url === "https://deploy.example.test/_p2p/query") {
+            return new Response(JSON.stringify({
+              room_id: "!agents:deploy.example.test",
+              messages: []
+            }), { status: 200 });
+          }
           return new Response(JSON.stringify({
             access_token: "matrix-agent-token",
             device_id: "DEVDEPLOY",
             user_id: "@agent:deploy.example.test",
             homeserver: "https://deploy.example.test"
           }), { status: 200 });
+        },
+        dnsResolver: {
+          resolve4: async () => ["203.0.113.42"]
         }
       })
     ).resolves.toMatchObject({
@@ -150,6 +162,11 @@ describe("deploy operation", () => {
         url: "https://deploy.example.test/_p2p/command",
         authorization: "Bearer agent-secret",
         body: { action: "agent.matrix_session.create", params: { device_id: "direxio-connect-deploy.example.test" } }
+      },
+      {
+        url: "https://deploy.example.test/_p2p/query",
+        authorization: "Bearer agent-secret",
+        body: { action: "mcp.messages.list", params: { room_id: "!agents:deploy.example.test" } }
       }
     ]);
     expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "ec2" && normalizedAwsArgs(call.args)[1] === "run-instances")).toBe(true);
@@ -201,6 +218,8 @@ describe("deploy operation", () => {
     expect(sshCall?.args.join(" ")).not.toContain("'\\''deploy.example.test'\\''");
     expect(calls.some((call) => call.command === "direxio-connect" && call.args[1] === "install")).toBe(true);
     expect(calls.some((call) => call.command === "direxio-mcp" && call.args[1] === "install")).toBe(true);
+    expect(calls.some((call) => call.command === "direxio-mcp" && call.args[1] === "status")).toBe(true);
+    expect(state.runtime_checks.summary).toMatchObject({ status: "passed" });
   });
 
   it("resumes from recorded AWS resources without creating duplicates", async () => {
@@ -260,11 +279,15 @@ describe("deploy operation", () => {
         }
         if (command === "direxio-connect" && args[1] === "status") return { stdout: `Status: Running\nWorkDir: ${join(serviceDir, "direxio-connect")}\n`, stderr: "", exitCode: 0 };
         if (command === "direxio-connect" && args[1] === "logs") return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
+        if (command === "direxio-mcp" && args[1] === "status") return { stdout: '{"status":"Running"}', stderr: "", exitCode: 0 };
         return { stdout: "", stderr: "", exitCode: 0 };
       },
       fetch: async (input, init) => {
         if (String(input) === "https://resume.example.test/healthz") {
           return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+        }
+        if (String(input) === "https://resume.example.test/_p2p/query") {
+          return new Response(JSON.stringify({ room_id: "!agents:resume.example.test", messages: [] }), { status: 200 });
         }
         return new Response(JSON.stringify({
           access_token: "matrix-agent-token",
@@ -272,6 +295,9 @@ describe("deploy operation", () => {
           user_id: "@agent:resume.example.test",
           homeserver: "https://resume.example.test"
         }), { status: 200 });
+      },
+      dnsResolver: {
+        resolve4: async () => ["203.0.113.50"]
       }
     });
 
@@ -331,6 +357,314 @@ describe("deploy operation", () => {
     });
   });
 
+  it("auto-selects user-managed DNS when Route53 has no public matching hosted zone", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-user-dns-"));
+    const serviceDir = join(home, ".direxio", "nodes", "manual-dns.example.test");
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const healthCalls: string[] = [];
+
+    await expect(
+      deployService({
+        homeDir: home,
+        serviceId: "manual-dns.example.test",
+        domain: "manual-dns.example.test",
+        region: "us-east-1",
+        confirmDomainBinding: true,
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+          if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "ssm") return { stdout: '{"Parameters":[{"Value":"ami-user-dns"}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-security-group") return { stdout: '{"GroupId":"sg-user-dns"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-key-pair") return { stdout: '{"KeyName":"direxio-user-dns","KeyMaterial":"PRIVATE"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "run-instances") return { stdout: '{"Instances":[{"InstanceId":"i-user-dns","BlockDeviceMappings":[{"Ebs":{"VolumeId":"vol-user-dns"}}]}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "allocate-address") return { stdout: '{"AllocationId":"eipalloc-user-dns","PublicIp":"203.0.113.77"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "route53" && awsArgs[1] === "list-hosted-zones") {
+            return {
+              stdout: '{"HostedZones":[{"Id":"/hostedzone/ZPRIVATE","Name":"manual-dns.example.test.","Config":{"PrivateZone":true}}]}',
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+        fetch: async (input) => {
+          healthCalls.push(String(input));
+          return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+        },
+        dnsResolver: {
+          resolve4: async () => []
+        }
+      })
+    ).rejects.toThrow("waiting for DNS A record manual-dns.example.test -> 203.0.113.77");
+
+    expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "route53" && normalizedAwsArgs(call.args)[1] === "create-hosted-zone")).toBe(false);
+    expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "route53" && normalizedAwsArgs(call.args)[1] === "change-resource-record-sets")).toBe(false);
+    expect(calls.some((call) => call.command === "ssh")).toBe(false);
+    expect(healthCalls).toEqual([]);
+    expect(JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"))).toMatchObject({
+      domain_mode: "user",
+      dns_ready: false,
+      phases: {
+        S3_PROVISION: {
+          status: "waiting_user",
+          detail: "waiting for DNS A record manual-dns.example.test -> 203.0.113.77"
+        }
+      },
+      resources: {
+        public_ip: "203.0.113.77",
+        user_dns_required: true,
+        user_dns_a_record: "manual-dns.example.test A 203.0.113.77"
+      }
+    });
+  });
+
+  it("blocks Route53 A record overwrite until the operator confirms it", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-route53-overwrite-"));
+    const serviceDir = join(home, ".direxio", "nodes", "overwrite.example.test");
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await expect(
+      deployService({
+        homeDir: home,
+        serviceId: "overwrite.example.test",
+        domain: "overwrite.example.test",
+        region: "us-east-1",
+        domainMode: "route53",
+        confirmDomainBinding: true,
+        runner: async (command, args) => {
+          calls.push({ command, args });
+          const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+          if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "ssm") return { stdout: '{"Parameters":[{"Value":"ami-overwrite"}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-security-group") return { stdout: '{"GroupId":"sg-overwrite"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-key-pair") return { stdout: '{"KeyName":"direxio-overwrite","KeyMaterial":"PRIVATE"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "run-instances") return { stdout: '{"Instances":[{"InstanceId":"i-overwrite","BlockDeviceMappings":[{"Ebs":{"VolumeId":"vol-overwrite"}}]}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "allocate-address") return { stdout: '{"AllocationId":"eipalloc-overwrite","PublicIp":"203.0.113.88"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "route53" && awsArgs[1] === "list-hosted-zones") return { stdout: '{"HostedZones":[{"Id":"/hostedzone/ZOVERWRITE","Name":"overwrite.example.test."}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "route53" && awsArgs[1] === "list-resource-record-sets") return { stdout: '{"ResourceRecordSets":[{"Name":"overwrite.example.test.","Type":"A","ResourceRecords":[{"Value":"198.51.100.10"}]}]}', stderr: "", exitCode: 0 };
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+        dnsResolver: {
+          resolve4: async () => ["198.51.100.10"]
+        }
+      })
+    ).rejects.toThrow("Route53 A record overwrite requires confirmation");
+
+    expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "route53" && normalizedAwsArgs(call.args)[1] === "change-resource-record-sets")).toBe(false);
+    expect(JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"))).toMatchObject({
+      domain_mode: "route53",
+      phases: {
+        S3_PROVISION: {
+          status: "waiting_user",
+          detail: "Route53 A record overwrite requires confirmation"
+        }
+      },
+      resources: {
+        route53_zone_id: "ZOVERWRITE",
+        route53_existing_a_value: "198.51.100.10",
+        route53_pending_a_value: "203.0.113.88"
+      }
+    });
+  });
+
+  it("overwrites a Route53 A record after explicit confirmation", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-route53-confirmed-"));
+    const serviceDir = join(home, ".direxio", "nodes", "confirmed-overwrite.example.test");
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const fetchCalls: string[] = [];
+
+    await deployService({
+      homeDir: home,
+      serviceId: "confirmed-overwrite.example.test",
+      domain: "confirmed-overwrite.example.test",
+      region: "us-east-1",
+      domainMode: "route53",
+      confirmDomainBinding: true,
+      confirmDnsOverwrite: true,
+      runner: async (command, args) => {
+        calls.push({ command, args });
+        const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+        if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+        if (command === "aws" && awsArgs[0] === "ssm") return { stdout: '{"Parameters":[{"Value":"ami-confirmed"}]}', stderr: "", exitCode: 0 };
+        if (command === "aws" && awsArgs[1] === "create-security-group") return { stdout: '{"GroupId":"sg-confirmed"}', stderr: "", exitCode: 0 };
+        if (command === "aws" && awsArgs[1] === "create-key-pair") return { stdout: '{"KeyName":"direxio-confirmed","KeyMaterial":"PRIVATE"}', stderr: "", exitCode: 0 };
+        if (command === "aws" && awsArgs[1] === "run-instances") return { stdout: '{"Instances":[{"InstanceId":"i-confirmed","BlockDeviceMappings":[{"Ebs":{"VolumeId":"vol-confirmed"}}]}]}', stderr: "", exitCode: 0 };
+        if (command === "aws" && awsArgs[1] === "allocate-address") return { stdout: '{"AllocationId":"eipalloc-confirmed","PublicIp":"203.0.113.92"}', stderr: "", exitCode: 0 };
+        if (command === "aws" && awsArgs[0] === "route53" && awsArgs[1] === "list-hosted-zones") return { stdout: '{"HostedZones":[{"Id":"/hostedzone/ZCONFIRMED","Name":"confirmed-overwrite.example.test."}]}', stderr: "", exitCode: 0 };
+        if (command === "aws" && awsArgs[0] === "route53" && awsArgs[1] === "list-resource-record-sets") return { stdout: '{"ResourceRecordSets":[{"Name":"confirmed-overwrite.example.test.","Type":"A","ResourceRecords":[{"Value":"198.51.100.11"}]}]}', stderr: "", exitCode: 0 };
+        if (command === "aws" && awsArgs[0] === "route53" && awsArgs[1] === "change-resource-record-sets") return { stdout: '{"ChangeInfo":{"Id":"/change/CUPSERT"}}', stderr: "", exitCode: 0 };
+        if (command === "ssh") return { stdout: '{"password":"12345678","access_token":"owner","agent_token":"agent","agent_room_id":"!agents:confirmed-overwrite.example.test"}', stderr: "", exitCode: 0 };
+        if (command === "direxio-connect" && args[1] === "status") return { stdout: `Status: Running\nWorkDir: ${join(serviceDir, "direxio-connect")}\n`, stderr: "", exitCode: 0 };
+        if (command === "direxio-connect" && args[1] === "logs") return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
+        if (command === "direxio-mcp" && args[1] === "status") return { stdout: '{"status":"Running"}', stderr: "", exitCode: 0 };
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      fetch: async (input) => {
+        fetchCalls.push(String(input));
+        if (String(input) === "https://confirmed-overwrite.example.test/healthz") {
+          return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+        }
+        if (String(input) === "https://confirmed-overwrite.example.test/_p2p/query") {
+          return new Response(JSON.stringify({ room_id: "!agents:confirmed-overwrite.example.test", messages: [] }), { status: 200 });
+        }
+        return new Response(JSON.stringify({
+          access_token: "matrix-token",
+          device_id: "DEV",
+          user_id: "@agent:confirmed-overwrite.example.test",
+          homeserver: "https://confirmed-overwrite.example.test"
+        }), { status: 200 });
+      },
+      dnsResolver: {
+        resolve4: async () => ["203.0.113.92"]
+      }
+    });
+
+    expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "route53" && normalizedAwsArgs(call.args)[1] === "change-resource-record-sets")).toBe(true);
+    expect(calls).toContainEqual(expect.objectContaining({
+      command: "aws",
+      args: expect.arrayContaining(["route53", "wait", "resource-record-sets-changed", "--id", "CUPSERT"])
+    }));
+    expect(fetchCalls).toContain("https://confirmed-overwrite.example.test/healthz");
+    expect(JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"))).toMatchObject({
+      dns_ready: true,
+      resources: {
+        route53_existing_a_value: "198.51.100.11",
+        route53_pending_a_value: "203.0.113.92",
+        route53_overwrite_confirmed: "true"
+      }
+    });
+  });
+
+  it("recommends local install commands without starting daemons when requested", async () => {
+    const { calls, serviceDir, state } = await runDeploymentWithLocalInstallMode("recommend");
+
+    expect(calls.some((call) => call.command === "npm")).toBe(false);
+    expect(calls.some((call) => call.command === "direxio-connect")).toBe(false);
+    expect(calls.some((call) => call.command === "direxio-mcp")).toBe(false);
+    expect(existsSync(join(serviceDir, "direxio-connect", "config.toml"))).toBe(true);
+    expect(existsSync(join(serviceDir, "mcp", "codex.toml"))).toBe(true);
+    expect(state).toMatchObject({
+      local_install_mode: "recommend",
+      connect_install_policy: "recommend",
+      connect_install_status: "recommended",
+      mcp_install_status: "recommended",
+      mcp_daemon_install_status: "not_installed",
+      local_install_commands: [
+        "direxio connect install --service local-install-recommend.example.test",
+        "direxio mcp install --service local-install-recommend.example.test --target codex",
+        "direxio verify runtime --service local-install-recommend.example.test"
+      ]
+    });
+  });
+
+  it("skips local runtime installs while still writing credentials and connect config", async () => {
+    const { calls, serviceDir, state } = await runDeploymentWithLocalInstallMode("skip");
+
+    expect(calls.some((call) => call.command === "npm")).toBe(false);
+    expect(calls.some((call) => call.command === "direxio-connect")).toBe(false);
+    expect(calls.some((call) => call.command === "direxio-mcp")).toBe(false);
+    expect(existsSync(join(serviceDir, "credentials.json"))).toBe(true);
+    expect(existsSync(join(serviceDir, "direxio-connect", "config.toml"))).toBe(true);
+    expect(existsSync(join(serviceDir, "mcp", "codex.toml"))).toBe(false);
+    expect(state).toMatchObject({
+      local_install_mode: "skip",
+      connect_install_policy: "skip",
+      connect_install_status: "skipped",
+      mcp_install_status: "skipped",
+      mcp_daemon_install_status: "not_installed",
+      local_install_commands: []
+    });
+  });
+
+  it("does not complete deploy when post-install runtime verification fails", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-runtime-fail-"));
+    const serviceId = "runtime-fail.example.test";
+    const serviceDir = join(home, ".direxio", "nodes", serviceId);
+    const keyFile = join(serviceDir, "direxio-runtime-fail.pem");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(keyFile, "PRIVATE_KEY", "utf8");
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        run_id: "direxio-runtime-fail",
+        region: "us-east-1",
+        domain_mode: "user",
+        domain: serviceId,
+        phases: {},
+        resources: {
+          ami_id: "ami-runtime-fail",
+          sg_id: "sg-runtime-fail",
+          key_name: "direxio-runtime-fail",
+          key_file: keyFile,
+          instance_id: "i-runtime-fail",
+          root_volume_id: "vol-runtime-fail",
+          eip_id: "eipalloc-runtime-fail",
+          public_ip: "203.0.113.67"
+        }
+      }),
+      "utf8"
+    );
+
+    await expect(
+      deployService({
+        homeDir: home,
+        serviceId,
+        domain: serviceId,
+        region: "us-east-1",
+        agent: "codex",
+        mcpTarget: "codex",
+        confirmDomainBinding: true,
+        runner: async (command, args) => {
+          const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+          if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+          if (command === "ssh") {
+            return {
+              stdout: JSON.stringify({
+                password: "12345678",
+                access_token: "owner-secret",
+                agent_token: "agent-secret",
+                agent_room_id: `!agents:${serviceId}`
+              }),
+              stderr: "",
+              exitCode: 0
+            };
+          }
+          if (command === "direxio-connect" && args[1] === "status") return { stdout: `Status: Running\nWorkDir: ${join(serviceDir, "direxio-connect")}\n`, stderr: "", exitCode: 0 };
+          if (command === "direxio-connect" && args[1] === "logs") return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
+          if (command === "direxio-mcp" && args[1] === "status") return { stdout: '{"status":"Running"}', stderr: "", exitCode: 0 };
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+        fetch: async (input) => {
+          if (String(input) === `https://${serviceId}/healthz`) {
+            return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+          }
+          if (String(input) === `https://${serviceId}/_p2p/query`) {
+            return new Response(JSON.stringify({ ok: true }), { status: 200 });
+          }
+          return new Response(JSON.stringify({
+            access_token: "matrix-token",
+            device_id: "DEVFAIL",
+            user_id: `@agent:${serviceId}`,
+            homeserver: `https://${serviceId}`
+          }), { status: 200 });
+        },
+        dnsResolver: {
+          resolve4: async () => ["203.0.113.67"]
+        }
+      })
+    ).rejects.toThrow("runtime verification failed after local install");
+
+    const state = JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"));
+    expect(state.phase).not.toBe("S7_VERIFY_E2E");
+    expect(state.runtime_checks.summary).toMatchObject({
+      status: "failed",
+      checks: {
+        mcp_smoke: "failed"
+      }
+    });
+  });
+
   it("requires an explicit AWS region", async () => {
     await expect(
       deployService({
@@ -346,4 +680,88 @@ describe("deploy operation", () => {
 
 function normalizedAwsArgs(args: string[]): string[] {
   return args[0] === "--region" ? args.slice(2) : args;
+}
+
+async function runDeploymentWithLocalInstallMode(mode: "recommend" | "skip"): Promise<{
+  calls: Array<{ command: string; args: string[] }>;
+  serviceDir: string;
+  state: any;
+}> {
+  const home = mkdtempSync(join(tmpdir(), `direxio-cli-deploy-local-${mode}-`));
+  const serviceId = `local-install-${mode}.example.test`;
+  const serviceDir = join(home, ".direxio", "nodes", serviceId);
+  const keyFile = join(serviceDir, `direxio-local-${mode}.pem`);
+  const calls: Array<{ command: string; args: string[] }> = [];
+  mkdirSync(serviceDir, { recursive: true });
+  writeFileSync(keyFile, "PRIVATE_KEY", "utf8");
+  writeFileSync(
+    join(serviceDir, "state.json"),
+    JSON.stringify({
+      run_id: `direxio-local-${mode}`,
+      region: "us-east-1",
+      domain_mode: "user",
+      domain: serviceId,
+      phases: {},
+      resources: {
+        ami_id: `ami-local-${mode}`,
+        sg_id: `sg-local-${mode}`,
+        key_name: `direxio-local-${mode}`,
+        key_file: keyFile,
+        instance_id: `i-local-${mode}`,
+        root_volume_id: `vol-local-${mode}`,
+        eip_id: `eipalloc-local-${mode}`,
+        public_ip: "203.0.113.66"
+      }
+    }),
+    "utf8"
+  );
+
+  await deployService({
+    homeDir: home,
+    serviceId,
+    domain: serviceId,
+    region: "us-east-1",
+    agent: "codex",
+    mcpTarget: "codex",
+    agentInstallMode: mode,
+    confirmDomainBinding: true,
+    runner: async (command, args) => {
+      calls.push({ command, args });
+      const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+      if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+      if (command === "ssh") {
+        return {
+          stdout: JSON.stringify({
+            password: "12345678",
+            access_token: "owner-secret",
+            agent_token: "agent-secret",
+            agent_room_id: `!agents:${serviceId}`
+          }),
+          stderr: "",
+          exitCode: 0
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    },
+    fetch: async (input) => {
+      if (String(input) === `https://${serviceId}/healthz`) {
+        return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        access_token: "matrix-token",
+        device_id: "DEVLOCAL",
+        user_id: `@agent:${serviceId}`,
+        homeserver: `https://${serviceId}`
+      }), { status: 200 });
+    },
+    dnsResolver: {
+      resolve4: async () => ["203.0.113.66"]
+    }
+  });
+
+  return {
+    calls,
+    serviceDir,
+    state: JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"))
+  };
 }

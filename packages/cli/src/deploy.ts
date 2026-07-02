@@ -2,24 +2,39 @@ import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { promises as dnsPromises } from "node:dns";
 import { renderCloudInitUserData } from "./cloud-init.js";
 import { connectInstall, defaultRunner, writeConnectConfig, type CommandResult, type CommandRunner } from "./connect.js";
-import { installMcpTarget } from "./mcp-config.js";
+import { installMcpTarget, writeMcpTargetArtifacts } from "./mcp-config.js";
 import type { ServiceConfig, ServiceContext } from "./service-context.js";
 import { readServiceState, serviceStateFile, writeOperationReport, writeServiceState, type ServiceState } from "./state.js";
+import { verifyRuntime } from "./verify.js";
 
 export interface DeployOptions {
   homeDir?: string;
   serviceId: string;
   domain: string;
   region: string;
+  domainMode?: DomainMode;
   agent?: string;
+  agentInstallMode?: AgentInstallMode;
   mcpTarget?: string;
   workspace?: string;
   confirmDomainBinding: boolean;
+  confirmDnsOverwrite?: boolean;
   runner?: CommandRunner;
   fetch?: typeof fetch;
+  dnsResolver?: DnsResolver;
   now?: () => string;
+}
+
+export type DomainMode = "auto" | "user" | "route53";
+export type AgentInstallMode = "auto" | "recommend" | "skip";
+
+export interface DnsResolver {
+  resolve4(domain: string): Promise<string[]>;
+  resolveNs?: (domain: string) => Promise<string[]>;
+  resolve4At?: (server: string, domain: string) => Promise<string[]>;
 }
 
 export interface DeployResult {
@@ -28,6 +43,15 @@ export interface DeployResult {
   domain: string;
   state: string;
   report: string;
+}
+
+export class WaitingForUserAction extends Error {
+  readonly exitCode = 2;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WaitingForUserAction";
+  }
 }
 
 interface BootstrapCredentials {
@@ -105,14 +129,9 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
   const matrixSession = await createMatrixSession(options, domain, bootstrap.agent_token, `direxio-connect-${serviceId}`);
   writeLocalWiring(options, context, state, domain, bootstrap, matrixSession);
   const serviceConfig = serviceConfigFromDeploy(context, domain, bootstrap, String(state.agent_node_id));
-  await connectInstall(context, { runner: options.runner });
-  state.connect_install_status = "installed";
+  const localWiringEvidence = await applyLocalInstallMode(options, context, state, serviceConfig);
   writeServiceState(context, state);
-  const mcpInstall = await installMcpTarget(serviceConfig, options.mcpTarget ?? options.agent ?? "codex", { runner: options.runner });
-  state.mcp_install_status = "installed";
-  state.mcp_daemon_install_status = mcpInstall.daemon_install_mode === "detached_process" ? "detached_process" : "installed";
-  writeServiceState(context, state);
-  markPhaseDone(state, "S6_WIRE_LOCAL", ts, "local credentials, connect, and MCP wiring generated");
+  markPhaseDone(state, "S6_WIRE_LOCAL", ts, localWiringEvidence);
   markPhaseDone(state, "S7_VERIFY_E2E", ts, "deployment automation completed");
 
   writeServiceState(context, state);
@@ -136,10 +155,12 @@ function initialState(options: DeployOptions, context: ServiceContext, domain: s
   const phaseState: Record<string, { status: string }> = {};
   for (const phase of phases) phaseState[phase] = { status: "pending" };
   const agent = options.agent ?? "codex";
+  const domainMode = normalizeDomainMode(options.domainMode ?? "auto");
+  const agentInstallMode = normalizeAgentInstallMode(options.agentInstallMode ?? "auto");
   return {
     run_id: `direxio-${Date.now()}`,
     region: options.region,
-    domain_mode: "route53",
+    domain_mode: domainMode,
     domain,
     domain_confirmed_irreversible: true,
     billing_warnings: [
@@ -162,8 +183,10 @@ function initialState(options: DeployOptions, context: ServiceContext, domain: s
     connect_npm_package: "direxio-connent@latest",
     connect_config: join(context.serviceDir, "direxio-connect", "config.toml"),
     connect_runtime_dir: join(context.serviceDir, "direxio-connect"),
-    connect_install_policy: "auto",
+    connect_install_policy: agentInstallMode,
     connect_install_mode: "direxio-connect",
+    local_install_mode: agentInstallMode,
+    local_install_commands: [],
     mcp_npm_package: "direxio-mcp@latest",
     mcp_command: "direxio-mcp",
     mcp_config_dir: join(context.serviceDir, "mcp"),
@@ -175,12 +198,19 @@ function loadOrInitializeState(options: DeployOptions, context: ServiceContext, 
   const base = initialState(options, context, domain, ts);
   if (!existsSync(serviceStateFile(context))) return base;
   const existing = readServiceState(context);
+  const existingMode = normalizeDomainMode(existing.domain_mode || "auto");
+  const requestedMode = normalizeDomainMode(options.domainMode ?? existingMode);
+  const existingInstallMode = normalizeAgentInstallMode(existing.local_install_mode || existing.connect_install_policy || "auto");
+  const requestedInstallMode = normalizeAgentInstallMode(options.agentInstallMode ?? existingInstallMode);
+  if (options.domainMode && existingMode !== "auto" && requestedMode !== existingMode) {
+    throw new Error(`state is bound to domain_mode=${existingMode}; refusing requested domain_mode=${requestedMode}`);
+  }
   return {
     ...base,
     ...existing,
     region: options.region,
     domain,
-    domain_mode: "route53",
+    domain_mode: requestedMode,
     domain_confirmed_irreversible: true,
     phases: {
       ...base.phases,
@@ -195,6 +225,8 @@ function loadOrInitializeState(options: DeployOptions, context: ServiceContext, 
     connect_agent: options.agent ?? existing.connect_agent ?? base.connect_agent,
     connect_config: join(context.serviceDir, "direxio-connect", "config.toml"),
     connect_runtime_dir: join(context.serviceDir, "direxio-connect"),
+    connect_install_policy: requestedInstallMode,
+    local_install_mode: requestedInstallMode,
     mcp_config_dir: join(context.serviceDir, "mcp"),
     mcp_credentials_file: context.credentialsFile,
     billing_warnings: Array.isArray(existing.billing_warnings) && existing.billing_warnings.length > 0
@@ -259,23 +291,7 @@ async function provisionAwsResources(options: DeployOptions, context: ServiceCon
     await runAws(options, ["ec2", "associate-address", "--instance-id", String(state.resources.instance_id), "--allocation-id", String(address.AllocationId)]);
   }
 
-  if (!stringValue(state.resources.route53_zone_id)) {
-    const zone = await findOrCreateRoute53Zone(options, domain);
-    state.resources.route53_zone_id = zone.id;
-    state.resources.route53_zone_name = zone.name;
-    state.resources.route53_zone_created_by_deployer = String(zone.created);
-    writeServiceState(context, state);
-  }
-  const route53ChangeBatchFile = writeRoute53UpsertBatch(state, domain, String(state.resources.public_ip));
-  writeServiceState(context, state);
-  await runAws(options, [
-    "route53",
-    "change-resource-record-sets",
-    "--hosted-zone-id",
-    String(state.resources.route53_zone_id),
-    "--change-batch",
-    `file://${route53ChangeBatchFile}`
-  ]);
+  await configureDns(options, context, state, domain);
 }
 
 async function createSecurityGroup(options: DeployOptions, domain: string): Promise<string> {
@@ -312,10 +328,135 @@ async function createSecurityGroup(options: DeployOptions, domain: string): Prom
   return sgId;
 }
 
-async function findOrCreateRoute53Zone(options: DeployOptions, domain: string): Promise<{ id: string; name: string; created: boolean }> {
+async function configureDns(options: DeployOptions, context: ServiceContext, state: ServiceState, domain: string): Promise<void> {
+  const publicIp = String(state.resources.public_ip || "");
+  const requestedMode = normalizeDomainMode(state.domain_mode || options.domainMode || "auto");
+  let mode = requestedMode;
+
+  if (mode === "auto") {
+    const zone = stringValue(state.resources.route53_zone_id)
+      ? {
+          id: String(state.resources.route53_zone_id),
+          name: String(state.resources.route53_zone_name || domain),
+          created: String(state.resources.route53_zone_created_by_deployer) === "true"
+        }
+      : await findRoute53Zone(options, domain);
+    if (zone) {
+      mode = "route53";
+      recordRoute53Zone(state, zone);
+    } else {
+      mode = "user";
+    }
+    state.domain_mode = mode;
+    writeServiceState(context, state);
+  }
+
+  if (mode === "route53") {
+    const zone = stringValue(state.resources.route53_zone_id)
+      ? {
+          id: String(state.resources.route53_zone_id),
+          name: String(state.resources.route53_zone_name || domain),
+          created: String(state.resources.route53_zone_created_by_deployer) === "true"
+        }
+      : await findOrCreateRoute53Zone(options, domain);
+    recordRoute53Zone(state, zone);
+    writeServiceState(context, state);
+    await upsertRoute53ARecord(options, context, state, domain, publicIp);
+  } else {
+    state.domain_mode = "user";
+    state.resources.user_dns_required = true;
+    state.resources.user_dns_a_record = `${domain} A ${publicIp}`;
+    writeServiceState(context, state);
+  }
+
+  await requireDnsReady(options, context, state, domain, publicIp);
+}
+
+async function upsertRoute53ARecord(
+  options: DeployOptions,
+  context: ServiceContext,
+  state: ServiceState,
+  domain: string,
+  publicIp: string
+): Promise<void> {
+  const existing = await route53ExistingAValue(options, String(state.resources.route53_zone_id), domain);
+  if (existing && existing !== publicIp) {
+    state.resources.route53_existing_a_value = existing;
+    state.resources.route53_pending_a_value = publicIp;
+    if (!options.confirmDnsOverwrite) {
+      const detail = "Route53 A record overwrite requires confirmation";
+      markPhaseWaiting(state, "S3_PROVISION", new Date().toISOString(), detail);
+      writeServiceState(context, state);
+      throw new WaitingForUserAction(`${detail}: ${domain} ${existing} -> ${publicIp}; rerun with --confirm-dns-overwrite or DIREXIO_CONFIRM_DNS_OVERWRITE=1`);
+    }
+    state.resources.route53_overwrite_confirmed = "true";
+  }
+
+  const route53ChangeBatchFile = writeRoute53UpsertBatch(state, domain, publicIp);
+  writeServiceState(context, state);
+  const change = parseJsonObject((await runAws(options, [
+    "route53",
+    "change-resource-record-sets",
+    "--hosted-zone-id",
+    String(state.resources.route53_zone_id),
+    "--change-batch",
+    `file://${route53ChangeBatchFile}`
+  ])).stdout);
+  const changeId = stripChangeId(String(change.ChangeInfo?.Id || ""));
+  if (changeId) {
+    await runAws(options, ["route53", "wait", "resource-record-sets-changed", "--id", changeId]);
+  }
+}
+
+async function route53ExistingAValue(options: DeployOptions, zoneId: string, domain: string): Promise<string> {
+  if (!zoneId) return "";
+  const records = parseJsonObject((await runAws(options, [
+    "route53",
+    "list-resource-record-sets",
+    "--hosted-zone-id",
+    zoneId
+  ])).stdout);
+  const wantedName = `${domain.replace(/\.+$/, "")}.`;
+  for (const record of Array.isArray(records.ResourceRecordSets) ? records.ResourceRecordSets : []) {
+    if (String(record.Name || "") === wantedName && String(record.Type || "") === "A") {
+      const value = record.ResourceRecords?.[0]?.Value;
+      return typeof value === "string" ? value : "";
+    }
+  }
+  return "";
+}
+
+async function requireDnsReady(options: DeployOptions, context: ServiceContext, state: ServiceState, domain: string, publicIp: string): Promise<void> {
+  if (await domainResolvesToIp(options.dnsResolver ?? defaultDnsResolver, domain, publicIp)) {
+    state.dns_ready = true;
+    writeServiceState(context, state);
+    return;
+  }
+  state.dns_ready = false;
+  const detail = `waiting for DNS A record ${domain} -> ${publicIp}`;
+  markPhaseWaiting(state, "S3_PROVISION", new Date().toISOString(), detail);
+  writeServiceState(context, state);
+  throw new WaitingForUserAction(detail);
+}
+
+async function findOrCreateRoute53Zone(options: DeployOptions, domain: string): Promise<{ id: string; name: string; created: boolean; nameServers?: string }> {
+  const existing = await findRoute53Zone(options, domain);
+  if (existing) return existing;
+
+  const created = parseJsonObject((await runAws(options, ["route53", "create-hosted-zone", "--name", domain, "--caller-reference", `${domain}-${Date.now()}`])).stdout);
+  return {
+    id: stripHostedZoneId(created.HostedZone?.Id ?? ""),
+    name: domain,
+    created: true,
+    nameServers: Array.isArray(created.DelegationSet?.NameServers) ? created.DelegationSet.NameServers.join(",") : ""
+  };
+}
+
+async function findRoute53Zone(options: DeployOptions, domain: string): Promise<{ id: string; name: string; created: boolean; nameServers?: string } | null> {
   const zones = parseJsonObject((await runAws(options, ["route53", "list-hosted-zones"])).stdout);
   let best: { id: string; name: string; length: number } | null = null;
   for (const zone of Array.isArray(zones.HostedZones) ? zones.HostedZones : []) {
+    if (zone.Config?.PrivateZone === true) continue;
     const name = String(zone.Name ?? "").replace(/\.+$/, "").toLowerCase();
     if (!name) continue;
     if (domain === name || domain.endsWith(`.${name}`)) {
@@ -323,13 +464,16 @@ async function findOrCreateRoute53Zone(options: DeployOptions, domain: string): 
     }
   }
   if (best?.id) return { id: best.id, name: best.name, created: false };
+  return null;
+}
 
-  const created = parseJsonObject((await runAws(options, ["route53", "create-hosted-zone", "--name", domain, "--caller-reference", `${domain}-${Date.now()}`])).stdout);
-  return {
-    id: stripHostedZoneId(created.HostedZone?.Id ?? ""),
-    name: domain,
-    created: true
-  };
+function recordRoute53Zone(state: ServiceState, zone: { id: string; name: string; created: boolean; nameServers?: string }): void {
+  state.resources.route53_zone_id = zone.id;
+  state.resources.route53_zone_name = zone.name;
+  if (!stringValue(state.resources.route53_zone_created_by_deployer) || zone.created) {
+    state.resources.route53_zone_created_by_deployer = String(zone.created);
+  }
+  if (zone.nameServers) state.resources.route53_name_servers = zone.nameServers;
 }
 
 async function lookupUbuntuAmi(options: DeployOptions): Promise<string> {
@@ -456,6 +600,60 @@ function writeLocalWiring(
   state.connect_matrix_homeserver = matrixSession.homeserver;
 }
 
+async function applyLocalInstallMode(
+  options: DeployOptions,
+  context: ServiceContext,
+  state: ServiceState,
+  serviceConfig: ServiceConfig
+): Promise<string> {
+  const mode = normalizeAgentInstallMode(state.local_install_mode || options.agentInstallMode || "auto");
+  const target = options.mcpTarget ?? options.agent ?? "codex";
+  state.local_install_mode = mode;
+  state.connect_install_policy = mode;
+
+  if (mode === "auto") {
+    state.local_install_commands = [];
+    await connectInstall(context, { runner: options.runner });
+    state.connect_install_status = "installed";
+    writeServiceState(context, state);
+    const mcpInstall = await installMcpTarget(serviceConfig, target, { runner: options.runner });
+    state.mcp_install_status = "installed";
+    state.mcp_daemon_install_status = mcpInstall.daemon_install_mode === "detached_process" ? "detached_process" : "installed";
+    state.mcp_target_artifacts = mcpInstall.artifacts;
+    writeServiceState(context, state);
+    const summary = await verifyRuntime(context, { runner: options.runner, fetch: options.fetch, now: options.now });
+    Object.assign(state, readServiceState(context));
+    if (summary.status !== "passed") {
+      throw new Error(`runtime verification failed after local install: ${JSON.stringify(summary.checks)}`);
+    }
+    return "local credentials, connect, MCP wiring, and runtime verification completed";
+  }
+
+  if (mode === "recommend") {
+    state.local_install_commands = localInstallCommands(context.serviceId, target);
+    state.connect_install_status = "recommended";
+    state.mcp_install_status = "recommended";
+    state.mcp_daemon_install_status = "not_installed";
+    state.mcp_target_artifacts = writeMcpTargetArtifacts(serviceConfig, target);
+    return "local credentials and config generated; install commands recommended";
+  }
+
+  state.local_install_commands = [];
+  state.connect_install_status = "skipped";
+  state.mcp_install_status = "skipped";
+  state.mcp_daemon_install_status = "not_installed";
+  state.mcp_target_artifacts = {};
+  return "local credentials and connect config generated; local runtime install skipped";
+}
+
+function localInstallCommands(serviceId: string, target: string): string[] {
+  return [
+    `direxio connect install --service ${serviceId}`,
+    `direxio mcp install --service ${serviceId} --target ${target}`,
+    `direxio verify runtime --service ${serviceId}`
+  ];
+}
+
 function writeCredentials(context: ServiceContext, domain: string, bootstrap: BootstrapCredentials, nodeId: unknown): void {
   mkdirSync(context.serviceDir, { recursive: true });
   writeFileSync(
@@ -511,6 +709,11 @@ function markPhaseDone(state: ServiceState, phase: string, ts: string, evidence:
   state.phases[phase] = { status: "done", ts, evidence };
 }
 
+function markPhaseWaiting(state: ServiceState, phase: string, ts: string, detail: string): void {
+  state.phase = phase;
+  state.phases[phase] = { status: "waiting_user", ts, detail };
+}
+
 function parseJsonObject(text: string): Record<string, any> {
   const parsed = text.trim() ? JSON.parse(text) : {};
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -528,6 +731,54 @@ function envInteger(name: string, fallback: number): number {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const defaultDnsResolver: DnsResolver = {
+  resolve4: (domain) => dnsPromises.resolve4(domain),
+  resolveNs: (domain) => dnsPromises.resolveNs(domain),
+  resolve4At: async (server, domain) => {
+    const resolver = new dnsPromises.Resolver();
+    resolver.setServers([server]);
+    return await resolver.resolve4(domain);
+  }
+};
+
+async function domainResolvesToIp(resolver: DnsResolver, domain: string, ip: string): Promise<boolean> {
+  const authoritativeServers = await authoritativeNameServers(resolver, domain);
+  if (authoritativeServers.length > 0 && resolver.resolve4At) {
+    let authoritativeAnswered = false;
+    for (const server of authoritativeServers) {
+      try {
+        const values = await resolver.resolve4At(server, domain);
+        authoritativeAnswered = true;
+        if (values.includes(ip)) return true;
+      } catch {
+        continue;
+      }
+    }
+    if (authoritativeAnswered) return false;
+  }
+
+  try {
+    return (await resolver.resolve4(domain)).includes(ip);
+  } catch {
+    return false;
+  }
+}
+
+async function authoritativeNameServers(resolver: DnsResolver, domain: string): Promise<string[]> {
+  if (!resolver.resolveNs) return [];
+  const labels = domain.replace(/\.+$/, "").split(".");
+  for (let index = 0; index < labels.length - 1; index += 1) {
+    const candidate = labels.slice(index).join(".");
+    try {
+      const servers = await resolver.resolveNs(candidate);
+      if (servers.length > 0) return servers;
+    } catch {
+      continue;
+    }
+  }
+  return [];
 }
 
 function stringValue(value: unknown): string {
@@ -551,8 +802,24 @@ function normalizeDomainName(value: string): string {
   return value.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase();
 }
 
+function normalizeDomainMode(value: unknown): DomainMode {
+  const normalized = String(value || "auto").trim().toLowerCase();
+  if (normalized === "auto" || normalized === "user" || normalized === "route53") return normalized;
+  throw new Error(`unknown domain_mode=${normalized}; expected auto, user, or route53`);
+}
+
+function normalizeAgentInstallMode(value: unknown): AgentInstallMode {
+  const normalized = String(value || "auto").trim().toLowerCase();
+  if (normalized === "auto" || normalized === "recommend" || normalized === "skip") return normalized;
+  throw new Error(`unknown agent_install_mode=${normalized}; expected auto, recommend, or skip`);
+}
+
 function stripHostedZoneId(value: string): string {
   return value.replace(/^\/hostedzone\//, "");
+}
+
+function stripChangeId(value: string): string {
+  return value.replace(/^\/change\//, "");
 }
 
 function route53UpsertARecordBatch(domain: string, ip: string): string {

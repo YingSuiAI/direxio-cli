@@ -151,6 +151,7 @@ export function buildOperationReport(
     runtime_checks: {
       summary: st.runtime_checks?.summary || { status: "not_run" },
       connect_daemon: st.runtime_checks?.connect_daemon || { status: "not_run" },
+      mcp_daemon: st.runtime_checks?.mcp_daemon || { status: "not_run" },
       mcp_doctor: st.runtime_checks?.mcp_doctor || { status: "not_run" },
       mcp_smoke: st.runtime_checks?.mcp_smoke || { status: "not_run" },
       mcp_tools: st.runtime_checks?.mcp_tools || { status: "not_run" }
@@ -164,6 +165,9 @@ export function buildOperationReport(
     connect: {
       package: st.connect_npm_package || "direxio-connent@latest",
       agent: st.connect_agent || "",
+      install_policy: st.connect_install_policy || st.local_install_mode || "",
+      local_install_mode: st.local_install_mode || "",
+      local_install_commands: Array.isArray(st.local_install_commands) ? st.local_install_commands : [],
       config: st.connect_config || "",
       install_status: st.connect_install_status || ""
     },
@@ -180,16 +184,20 @@ export function buildOperationReport(
       daemon_install_status: st.mcp_daemon_install_status || "",
       daemon_url: st.mcp_daemon_url || "",
       daemon_status: st.mcp_daemon_status_command || "",
-      daemon_proxy: st.mcp_daemon_proxy_command || ""
+      daemon_proxy: st.mcp_daemon_proxy_command || "",
+      target_artifacts: st.mcp_target_artifacts || {}
     },
     resources: {
       region: st.region || "",
       domain_mode: st.domain_mode || "",
+      dns_ready: typeof st.dns_ready === "boolean" ? st.dns_ready : null,
       instance_type: st.instance_type || "",
       instance_id: st.resources?.instance_id || "",
       root_volume_id: st.resources?.root_volume_id || "",
       public_ip: st.resources?.public_ip || "",
       eip_id: st.resources?.eip_id || "",
+      user_dns_required: st.resources?.user_dns_required === true,
+      user_dns_a_record: st.resources?.user_dns_a_record || "",
       route53_zone_id: st.resources?.route53_zone_id || "",
       route53_zone_name: st.resources?.route53_zone_name || "",
       route53_zone_created_by_deployer: st.resources?.route53_zone_created_by_deployer || "",

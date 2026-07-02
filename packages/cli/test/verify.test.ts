@@ -61,6 +61,9 @@ describe("runtime verification", () => {
         now: () => "2026-07-01T02:03:04.000Z",
         runner: async (command, args) => {
           calls.push({ command, args });
+          if (command === "direxio-mcp" && args[1] === "status") {
+            return { stdout: JSON.stringify({ status: "Running" }), stderr: "", exitCode: 0 };
+          }
           if (args[1] === "status") {
             return {
               stdout: `Status: Running\nWorkDir: ${dirname(join(context.serviceDir, "direxio-connect", "config.toml"))}\n`,
@@ -83,6 +86,7 @@ describe("runtime verification", () => {
       failed_count: 0,
       checks: {
         connect_daemon: "passed",
+        mcp_daemon: "passed",
         mcp_doctor: "passed",
         mcp_tools: "passed",
         mcp_smoke: "passed"
@@ -91,7 +95,8 @@ describe("runtime verification", () => {
 
     expect(calls).toEqual([
       { command: "direxio-connect", args: ["daemon", "status", "--service-name", "im.example.com"] },
-      { command: "direxio-connect", args: ["daemon", "logs", "--service-name", "im.example.com", "-n", "120"] }
+      { command: "direxio-connect", args: ["daemon", "logs", "--service-name", "im.example.com", "-n", "120"] },
+      { command: "direxio-mcp", args: ["daemon", "status", "--service-name", "im.example.com", "--json"] }
     ]);
     expect(fetchCalls).toEqual([
       {
@@ -123,9 +128,10 @@ describe("runtime verification", () => {
       })
     ).resolves.toMatchObject({
       status: "failed",
-      failed_count: 1,
+      failed_count: 2,
       checks: {
-        connect_daemon: "failed"
+        connect_daemon: "failed",
+        mcp_daemon: "failed"
       }
     });
 

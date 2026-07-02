@@ -65,7 +65,10 @@ async function destroyAwsResources(state: ServiceState, options: DestroyOptions,
     recordEvidence(state, "key_pair", "skipped", "no key_name recorded", ts);
   }
 
-  if (resources.route53_zone_id) {
+  if (String(state.domain_mode || "") === "user") {
+    recordEvidence(state, "route53_a_record", "skipped", "user-managed DNS is outside automatic destroy scope", ts);
+    recordEvidence(state, "route53_hosted_zone", "skipped", "user-managed DNS is outside automatic destroy scope", ts);
+  } else if (resources.route53_zone_id) {
     if (state.domain && resources.public_ip) {
       await runAws(options, [
         "route53",

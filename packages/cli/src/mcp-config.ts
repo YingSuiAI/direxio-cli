@@ -22,7 +22,7 @@ export async function installMcpTarget(
   };
 }
 
-function writeMcpTargetArtifacts(config: ServiceConfig, target: string): Record<string, string> {
+export function writeMcpTargetArtifacts(config: ServiceConfig, target: string): Record<string, string> {
   const normalizedTarget = target.toLowerCase();
   const targets = normalizedTarget === "all" ? ["codex", "cursor", "hermes", "json", "openclaw"] : [normalizedTarget];
   const artifacts: Record<string, string> = {};

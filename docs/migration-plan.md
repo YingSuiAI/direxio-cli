@@ -11,7 +11,10 @@ Completion means users and agent skills can complete the current deployer-suppor
 The final command surface is:
 
 ```bash
-direxio deploy
+direxio onboard aws
+direxio aws import-csv <aws-access-key.csv>
+direxio aws verify
+direxio deploy --dns auto --agent-install auto
 direxio status
 direxio destroy
 direxio update
@@ -71,6 +74,8 @@ The product is unified at the command, service-context, and documentation level.
    - Port S0-S7 state machine from shell to TypeScript modules.
    - Preserve resumability, waiting-user states, recovery summaries, billing warnings, and redacted operation reports.
    - Keep remote EC2 paths Linux-only and local bridge paths host-native.
+   - Preserve DNS policies: `auto` uses public Route53 when available and otherwise waits for user-managed DNS; explicit Route53 overwrites require confirmation.
+   - Preserve local install policies: `auto`, `recommend`, and `skip`.
 
 6. Skill migration:
    - Port npm-managed skill install/update/refresh into `direxio skill`.
@@ -83,7 +88,7 @@ The product is unified at the command, service-context, and documentation level.
 
 ## Completion Criteria
 
-- `direxio deploy` can perform the current production EC2 deployment and local wiring flow.
+- `direxio deploy` can perform the current production EC2 deployment and local wiring flow, including DNS auto/user/Route53 behavior and post-install runtime verification.
 - `direxio destroy`, `update`, and `reset-app-data` cover the current resource and local-daemon cleanup rules.
 - `direxio connect` covers service-scoped daemon install/status/logs/restart.
 - `direxio mcp` covers doctor, tools, direct tool calls, HTTP endpoint, stdio proxy, and host snippet installation.

@@ -7,7 +7,10 @@ Unified local product surface for deploying Direxio, wiring the Matrix agent bri
 `direxio` is the single command users and agent skills should call:
 
 ```bash
-direxio deploy --service <service-id> --domain <domain> --region <aws-region> --confirm-domain
+direxio onboard aws
+direxio aws import-csv <aws-access-key.csv> --profile direxio-deployer --region <aws-region>
+direxio aws verify --profile direxio-deployer
+direxio deploy --service <service-id> --domain <domain> --region <aws-region> --dns auto --agent-install auto --confirm-domain
 direxio status --service <service-id>
 direxio update --service <service-id>
 direxio reset-app-data --service <service-id> --confirm
@@ -23,6 +26,8 @@ direxio verify runtime --service <service-id>
 direxio confirm app-initialization --service <service-id> --evidence "user completed initialization"
 direxio skill install --agent codex
 ```
+
+Deploy uses `--dns auto` by default: if the AWS account has a matching public Route53 hosted zone, `direxio` writes the A record there; otherwise it records the required user-managed DNS A record and exits with code `2` until the domain resolves to the Elastic IP. `--agent-install auto` is also the default. Use `--agent-install recommend` to write files and print install commands, or `--agent-install skip` to write credentials/config only.
 
 Internally, the product keeps deep modules:
 

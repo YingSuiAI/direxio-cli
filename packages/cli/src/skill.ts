@@ -80,7 +80,9 @@ Use the \`direxio\` command for Direxio operations. Do not call legacy shell pha
 Common commands:
 
 \`\`\`bash
-direxio deploy
+direxio onboard aws
+direxio aws verify --profile direxio-deployer
+direxio deploy --service <service-id> --domain <domain> --region <aws-region> --dns auto --agent-install auto --confirm-domain
 direxio status --service <service-id>
 direxio verify runtime --service <service-id>
 direxio connect install --service <service-id>
@@ -90,6 +92,8 @@ direxio update --service <service-id>
 direxio reset-app-data --service <service-id> --confirm
 direxio destroy --service <service-id>
 \`\`\`
+
+Default deploy behavior is \`--dns auto\` and \`--agent-install auto\`. Use \`--agent-install recommend\` to write files and commands without installing daemons, or \`--agent-install skip\` when the operator wants credentials/config only. Auto install must pass \`direxio verify runtime\` before the deployment is considered complete.
 
 Never print Matrix access tokens, agent tokens, initialization codes, AWS secrets, private keys, or full credential files. Use \`direxio status --json\` for redacted machine-readable state.
 `;

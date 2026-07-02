@@ -131,6 +131,40 @@ describe("service state reports", () => {
     });
   });
 
+  it("reports user-managed DNS instructions in status output", () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-state-user-dns-"));
+    const serviceDir = join(home, ".direxio", "nodes", "user-dns.example.test");
+    mkdirSync(serviceDir, { recursive: true });
+    const stateFile = join(serviceDir, "state.json");
+    const state = {
+      domain: "user-dns.example.test",
+      domain_mode: "user",
+      dns_ready: false,
+      agent_service_id: "user-dns.example.test",
+      agent_service_dir: serviceDir,
+      phases: {
+        S3_PROVISION: {
+          status: "waiting_user",
+          detail: "waiting for DNS A record user-dns.example.test -> 203.0.113.55"
+        }
+      },
+      resources: {
+        public_ip: "203.0.113.55",
+        user_dns_required: true,
+        user_dns_a_record: "user-dns.example.test A 203.0.113.55"
+      }
+    };
+
+    const report = buildOperationReport("status", "status_report", stateFile, "2026-07-01T00:00:00.000Z", state);
+
+    expect(report.resources).toMatchObject({
+      domain_mode: "user",
+      dns_ready: false,
+      user_dns_required: true,
+      user_dns_a_record: "user-dns.example.test A 203.0.113.55"
+    });
+  });
+
   it("requires runtime proof before confirming the agent mcp runtime gate", () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-state-"));
     writeState(home);

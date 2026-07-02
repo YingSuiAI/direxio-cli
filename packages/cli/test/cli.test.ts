@@ -57,6 +57,53 @@ describe("direxio CLI", () => {
     expect(stdout.join("\n")).not.toContain("agent-secret");
   });
 
+  it("prints AWS onboarding guidance", async () => {
+    const stdout: string[] = [];
+
+    const code = await runCli(["onboard", "aws", "--json"], {
+      stdout: (line) => stdout.push(line),
+      stderr: () => {}
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      ok: true,
+      paths: expect.arrayContaining([
+        expect.objectContaining({ id: "root-access-key" }),
+        expect.objectContaining({ id: "dedicated-iam-user" })
+      ])
+    });
+  });
+
+  it("routes AWS CSV import through the public CLI", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-aws-"));
+    const csv = join(home, "keys.csv");
+    writeFileSync(csv, "Access key ID,Secret access key\nAKIACLI,SECRETCLI\n", "utf8");
+    const stdout: string[] = [];
+
+    const code = await runCli(["aws", "import-csv", "--profile", "direxio-deployer", "--region", "us-west-2", csv, "--json"], {
+      homeDir: home,
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+      runner: async () => ({
+        stdout: JSON.stringify({
+          Account: "123456789012",
+          Arn: "arn:aws:iam::123456789012:user/DirexioDeployer"
+        }),
+        stderr: "",
+        exitCode: 0
+      })
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      ok: true,
+      profile: "direxio-deployer",
+      arn: "arn:aws:iam::<account>:user/DirexioDeployer"
+    });
+    expect(stdout.join("\n")).not.toContain("SECRETCLI");
+  });
+
   it("routes connect status through the service-scoped daemon command", async () => {
     const stdout: string[] = [];
     const commands: Array<{ command: string; args: string[] }> = [];
@@ -365,7 +412,10 @@ describe("direxio CLI", () => {
       homeDir: home,
       stdout: (line) => stdout.push(line),
       stderr: () => {},
-      runner: async (_command, args) => {
+      runner: async (command, args) => {
+        if (command === "direxio-mcp" && args[1] === "status") {
+          return { stdout: JSON.stringify({ status: "Running" }), stderr: "", exitCode: 0 };
+        }
         if (args[1] === "status") {
           return { stdout: `Status: Running\nWorkDir: ${dirname(join(connectDir, "config.toml"))}\n`, stderr: "", exitCode: 0 };
         }
@@ -524,14 +574,26 @@ describe("direxio CLI", () => {
           if (command === "ssh") return { stdout: '{"password":"12345678","access_token":"owner","agent_token":"agent","agent_room_id":"!agents:deploy.example.test"}', stderr: "", exitCode: 0 };
           if (command === "direxio-connect" && args[1] === "status") return { stdout: `Status: Running\nWorkDir: ${join(home, ".direxio", "nodes", "deploy.example.test", "direxio-connect")}\n`, stderr: "", exitCode: 0 };
           if (command === "direxio-connect" && args[1] === "logs") return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
+          if (command === "direxio-mcp" && args[1] === "status") return { stdout: '{"status":"Running"}', stderr: "", exitCode: 0 };
           return { stdout: "", stderr: "", exitCode: 0 };
         },
-        fetch: async () => new Response(JSON.stringify({
-          access_token: "matrix",
-          device_id: "DEV",
-          user_id: "@agent:deploy.example.test",
-          homeserver: "https://deploy.example.test"
-        }), { status: 200 })
+        fetch: async (input) => {
+          if (String(input) === "https://deploy.example.test/_p2p/query") {
+            return new Response(JSON.stringify({ room_id: "!agents:deploy.example.test", messages: [] }), { status: 200 });
+          }
+          if (String(input) === "https://deploy.example.test/healthz") {
+            return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+          }
+          return new Response(JSON.stringify({
+            access_token: "matrix",
+            device_id: "DEV",
+            user_id: "@agent:deploy.example.test",
+            homeserver: "https://deploy.example.test"
+          }), { status: 200 });
+        },
+        dnsResolver: {
+          resolve4: async () => ["203.0.113.43"]
+        }
       }
     );
 
@@ -541,5 +603,47 @@ describe("direxio CLI", () => {
       service_id: "deploy.example.test",
       domain: "deploy.example.test"
     });
+  });
+
+  it("returns exit code 2 when deploy is waiting for user-managed DNS", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-wait-dns-"));
+    const stderr: string[] = [];
+
+    const code = await runCli(
+      [
+        "deploy",
+        "--service",
+        "wait-dns.example.test",
+        "--domain",
+        "wait-dns.example.test",
+        "--region",
+        "us-east-1",
+        "--dns",
+        "user",
+        "--confirm-domain",
+        "--json"
+      ],
+      {
+        homeDir: home,
+        stdout: () => {},
+        stderr: (line) => stderr.push(line),
+        runner: async (command, args) => {
+          const awsArgs = command === "aws" && args[0] === "--region" ? args.slice(2) : args;
+          if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[0] === "ssm") return { stdout: '{"Parameters":[{"Value":"ami-wait-dns"}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-security-group") return { stdout: '{"GroupId":"sg-wait-dns"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "create-key-pair") return { stdout: '{"KeyName":"direxio-wait-dns","KeyMaterial":"PRIVATE"}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "run-instances") return { stdout: '{"Instances":[{"InstanceId":"i-wait-dns","BlockDeviceMappings":[{"Ebs":{"VolumeId":"vol-wait-dns"}}]}]}', stderr: "", exitCode: 0 };
+          if (command === "aws" && awsArgs[1] === "allocate-address") return { stdout: '{"AllocationId":"eipalloc-wait-dns","PublicIp":"203.0.113.91"}', stderr: "", exitCode: 0 };
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+        dnsResolver: {
+          resolve4: async () => []
+        }
+      }
+    );
+
+    expect(code).toBe(2);
+    expect(stderr.join("\n")).toContain("waiting for DNS A record wait-dns.example.test -> 203.0.113.91");
   });
 });

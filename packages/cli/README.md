@@ -12,7 +12,10 @@ npm install -g @direxio/cli
 ## Commands
 
 ```bash
-direxio deploy --service <service-id> --domain <domain> --region <aws-region> --confirm-domain
+direxio onboard aws
+direxio aws import-csv <aws-access-key.csv> --profile direxio-deployer --region <aws-region>
+direxio aws verify --profile direxio-deployer
+direxio deploy --service <service-id> --domain <domain> --region <aws-region> --dns auto --agent-install auto --confirm-domain
 direxio status --service <service-id>
 direxio update --service <service-id>
 direxio reset-app-data --service <service-id> --confirm
@@ -29,6 +32,8 @@ direxio mcp call list_messages --service <service-id> --json '{"limit":20}'
 direxio verify runtime --service <service-id>
 direxio skill install --agent codex
 ```
+
+`--dns auto` is the default. A matching public Route53 hosted zone is used automatically; otherwise `direxio` records the user-managed DNS A record and exits with code `2` until the domain resolves. `--agent-install auto` installs and verifies connect/MCP by default; `recommend` writes files and next commands; `skip` writes credentials/config only.
 
 `direxio` is the orchestration CLI. The long-running bridge stays in
 `direxio-connect`, and MCP protocol serving stays in `direxio-mcp`.

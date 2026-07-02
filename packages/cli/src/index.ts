@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { importAwsCsvCredentials, onboardAws, verifyAwsProfile } from "./aws-credentials.js";
 import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
-import { deployService } from "./deploy.js";
+import { deployService, type AgentInstallMode, type DnsResolver, type DomainMode } from "./deploy.js";
 import { destroyService } from "./destroy.js";
 import { installMcpTarget } from "./mcp-config.js";
 import {
@@ -24,6 +25,7 @@ export interface CliRuntime {
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
   fetch?: typeof fetch;
+  dnsResolver?: DnsResolver;
   runner?: CommandRunner;
 }
 
@@ -42,6 +44,12 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
       const file = writeActiveService(serviceId, runtime.homeDir);
       stdout(JSON.stringify({ ok: true, service_id: serviceId, active_service_file: file }, null, 2));
       return 0;
+    }
+    if (command === "onboard") {
+      return runOnboard(rest, stdout);
+    }
+    if (command === "aws") {
+      return await runAws(rest, runtime, stdout);
     }
     if (command === "mcp") {
       return await runMcp(rest, runtime, stdout);
@@ -89,12 +97,16 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
           serviceId: optionValue(rest, "--service") ?? optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
           domain: optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
           region: optionValue(rest, "--region") ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "",
+          domainMode: domainModeValue(rest),
           agent: optionValue(rest, "--agent") ?? process.env.DIREXIO_CONNECT_AGENT ?? "codex",
+          agentInstallMode: agentInstallModeValue(rest),
           mcpTarget: optionValue(rest, "--mcp-target") ?? optionValue(rest, "--target") ?? "codex",
           workspace: optionValue(rest, "--workspace"),
           confirmDomainBinding: rest.includes("--confirm-domain") || process.env.CONFIRM_DOMAIN_BINDING === "1",
+          confirmDnsOverwrite: rest.includes("--confirm-dns-overwrite") || process.env.DIREXIO_CONFIRM_DNS_OVERWRITE === "1" || process.env.CONFIRM_DNS_OVERWRITE === "1",
           runner: runtime.runner,
-          fetch: runtime.fetch
+          fetch: runtime.fetch,
+          dnsResolver: runtime.dnsResolver
         }),
         rest.includes("--json"),
         stdout
@@ -104,6 +116,9 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     throw new Error(`unknown command: ${command}`);
   } catch (error) {
     stderr(error instanceof Error ? error.message : String(error));
+    if (error && typeof error === "object" && "exitCode" in error && typeof (error as { exitCode?: unknown }).exitCode === "number") {
+      return (error as { exitCode: number }).exitCode;
+    }
     return 1;
   }
 }
@@ -117,6 +132,34 @@ function runSkill(argv: string[], runtime: CliRuntime, stdout: (line: string) =>
   if (!agent) throw new Error("skill requires --agent <runtime>");
   printValue(installSkill({ agent, homeDir: runtime.homeDir, action }), rest.includes("--json"), stdout);
   return 0;
+}
+
+function runOnboard(argv: string[], stdout: (line: string) => void): number {
+  const [target, ...rest] = argv;
+  if (target !== "aws") throw new Error("onboard requires aws");
+  printValue(onboardAws(), rest.includes("--json"), stdout);
+  return 0;
+}
+
+async function runAws(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {
+  const [action, ...rest] = argv;
+  if (action === "import-csv") {
+    const csvFile = positionalValue(rest);
+    if (!csvFile) throw new Error("aws import-csv requires <aws-access-key.csv>");
+    printValue(await importAwsCsvCredentials({
+      csvFile,
+      profile: optionValue(rest, "--profile"),
+      region: optionValue(rest, "--region"),
+      homeDir: runtime.homeDir,
+      runner: runtime.runner
+    }), rest.includes("--json"), stdout);
+    return 0;
+  }
+  if (action === "verify") {
+    printValue(await verifyAwsProfile({ profile: optionValue(rest, "--profile"), runner: runtime.runner }), rest.includes("--json"), stdout);
+    return 0;
+  }
+  throw new Error("aws requires import-csv or verify");
 }
 
 function isSkillAction(value: string | undefined): value is SkillAction {
@@ -235,9 +278,41 @@ function optionValue(argv: string[], name: string): string | undefined {
   return value;
 }
 
+function positionalValue(argv: string[]): string | undefined {
+  const optionsWithValues = new Set(["--profile", "--region", "--service", "--domain", "--dns", "--domain-mode", "--agent", "--agent-install", "--local-install", "--mcp-target", "--target", "--workspace", "--evidence", "--image", "--lines", "-n"]);
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value.startsWith("--") || value === "-n") {
+      if (optionsWithValues.has(value) && argv[index + 1] && !argv[index + 1].startsWith("--")) index += 1;
+      continue;
+    }
+    return value;
+  }
+  return undefined;
+}
+
+function domainModeValue(argv: string[]): DomainMode | undefined {
+  const value = optionValue(argv, "--dns") ?? optionValue(argv, "--domain-mode") ?? process.env.DOMAIN_MODE;
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "auto" || normalized === "user" || normalized === "route53") return normalized;
+  throw new Error(`unknown domain mode: ${value}`);
+}
+
+function agentInstallModeValue(argv: string[]): AgentInstallMode | undefined {
+  const value = optionValue(argv, "--agent-install") ?? optionValue(argv, "--local-install") ?? process.env.DIREXIO_AGENT_INSTALL;
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "auto" || normalized === "recommend" || normalized === "skip") return normalized;
+  throw new Error(`unknown agent install mode: ${value}`);
+}
+
 function usage(): string {
   return `Usage:
-  direxio deploy|status|destroy|update|reset-app-data
+  direxio deploy [--dns auto|user|route53] [--agent-install auto|recommend|skip]
+  direxio status|destroy|update|reset-app-data
+  direxio onboard aws
+  direxio aws <import-csv|verify>
   direxio connect <install|status|logs|restart>
   direxio mcp <doctor|tools|call|install|status|proxy>
   direxio skill <install|update|refresh>

@@ -151,6 +151,52 @@ describe("destroy operation", () => {
     });
   });
 
+  it("does not touch Route53 for user-managed DNS state", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-user-dns-"));
+    const serviceDir = join(home, ".direxio", "nodes", "user-dns.example.test");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        domain: "user-dns.example.test",
+        domain_mode: "user",
+        agent_service_id: "user-dns.example.test",
+        agent_service_dir: serviceDir,
+        resources: {
+          public_ip: "203.0.113.44",
+          route53_zone_id: "ZSHOULDNOTTOUCH",
+          route53_zone_name: "example.test",
+          route53_zone_created_by_deployer: "false"
+        }
+      }),
+      "utf8"
+    );
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await destroyService({
+      serviceId: "user-dns.example.test",
+      serviceDir,
+      credentialsFile: join(serviceDir, "credentials.json")
+    }, {
+      runner: async (command, args) => {
+        calls.push({ command, args });
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(calls.some((call) => call.command === "aws" && call.args[0] === "route53")).toBe(false);
+    const reportPath = join(home, ".direxio", "reports", "user-dns.example.test", "operation-report.json");
+    expect(JSON.parse(readFileSync(reportPath, "utf8"))).toMatchObject({
+      destroy: {
+        user_managed_dns_not_removed: true,
+        evidence: {
+          route53_a_record: { status: "skipped" },
+          route53_hosted_zone: { status: "skipped" }
+        }
+      }
+    });
+  });
+
   const winIt = process.platform === "win32" ? it : it.skip;
   winIt("removes a Windows service directory containing a read-only private key ACL", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-windows-acl-"));

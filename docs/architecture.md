@@ -7,7 +7,10 @@
 ## Command Surface
 
 ```bash
-direxio deploy
+direxio onboard aws
+direxio aws import-csv <aws-access-key.csv>
+direxio aws verify
+direxio deploy --dns auto --agent-install auto
 direxio status
 direxio destroy
 direxio update
@@ -62,6 +65,12 @@ All local service state lives under:
 ```
 
 The CLI resolves `--service <service_id>` first, then the active service selected by `direxio use <service_id>`. Skills should prefer explicit `--service` when they know the target service.
+
+## Deployment Policies
+
+DNS defaults to `auto`: use a matching public Route53 hosted zone when one exists in the AWS account; otherwise record the required user-managed A record and wait for DNS to resolve. Route53 A record overwrites require `--confirm-dns-overwrite`.
+
+Local runtime install defaults to `auto`: install `direxio-connect` and `direxio-mcp`, then require runtime verification to pass before marking deploy complete. `recommend` writes files, MCP host snippets, and next commands without starting daemons. `skip` writes credentials and connect config only.
 
 ## Non-Goals
 

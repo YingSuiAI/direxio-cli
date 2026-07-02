@@ -1,6 +1,6 @@
 import { dirname, join, normalize } from "node:path";
 import { connectLogs, connectStatus, type CommandRunner } from "./connect.js";
-import { callMcpTool, createDoctorReport, listMcpTools } from "./mcp.js";
+import { callMcpTool, createDoctorReport, listMcpTools, mcpDaemonStatus } from "./mcp.js";
 import { loadServiceConfigFromContext, type ServiceContext } from "./service-context.js";
 import { readServiceState, writeServiceState, type ServiceState } from "./state.js";
 
@@ -27,12 +27,14 @@ export async function verifyRuntime(
   const now = options.now?.() ?? new Date().toISOString();
 
   await recordCheck(state, "connect_daemon", () => verifyConnectDaemon(context, state, options, now), now);
+  await recordCheck(state, "mcp_daemon", () => verifyMcpDaemon(context, state, options, now), now);
   await recordCheck(state, "mcp_doctor", () => verifyMcpDoctor(context, state, now), now);
   await recordCheck(state, "mcp_tools", () => verifyMcpTools(state, now), now);
   await recordCheck(state, "mcp_smoke", () => verifyMcpSmoke(context, state, options, now), now);
 
   const checks = {
     connect_daemon: checkStatus(state, "connect_daemon"),
+    mcp_daemon: checkStatus(state, "mcp_daemon"),
     mcp_doctor: checkStatus(state, "mcp_doctor"),
     mcp_tools: checkStatus(state, "mcp_tools"),
     mcp_smoke: checkStatus(state, "mcp_smoke")
@@ -58,7 +60,7 @@ async function verifyConnectDaemon(
   options: RuntimeVerifyOptions,
   now: string
 ): Promise<void> {
-  if (state.connect_install_status === "recommend" || state.connect_install_status === "skip") {
+  if (localInstallIsManual(state, state.connect_install_status)) {
     state.runtime_checks.connect_daemon = {
       status: "manual_pending",
       ts: now,
@@ -118,6 +120,45 @@ async function verifyConnectDaemon(
     daemon_status: status.status,
     work_dir: status.work_dir,
     expected_work_dir: expectedWorkDir
+  };
+}
+
+async function verifyMcpDaemon(
+  context: ServiceContext,
+  state: ServiceState,
+  options: RuntimeVerifyOptions,
+  now: string
+): Promise<void> {
+  if (localInstallIsManual(state, state.mcp_install_status)) {
+    state.runtime_checks.mcp_daemon = {
+      status: state.mcp_install_status === "skipped" || state.mcp_daemon_install_status === "skipped" ? "skipped" : "manual_pending",
+      ts: now,
+      evidence: `direxio-mcp daemon install is an explicit operator action for policy=${state.local_install_mode || state.mcp_install_status || "unknown"}`,
+      service_name: context.serviceId
+    };
+    return;
+  }
+
+  const report = await mcpDaemonStatus(context.serviceId, { runner: options.runner, binary: state.mcp_command || "direxio-mcp" });
+  const status = String(report.status ?? report.Status ?? report.state ?? report.daemon_status ?? "").toLowerCase();
+  const ok = report.ok === true || ["running", "ready", "ok", "installed"].includes(status);
+  if (!ok) {
+    state.runtime_checks.mcp_daemon = {
+      status: "failed",
+      ts: now,
+      evidence: "direxio-mcp daemon status is not ready",
+      service_name: context.serviceId,
+      daemon_status: status || "unknown"
+    };
+    return;
+  }
+
+  state.runtime_checks.mcp_daemon = {
+    status: "passed",
+    ts: now,
+    evidence: "direxio-mcp daemon is ready for this service",
+    service_name: context.serviceId,
+    daemon_status: status || "ok"
   };
 }
 
@@ -204,6 +245,11 @@ function checkStatus(state: ServiceState, check: string): string {
 
 function runtimeStatusCountsAsFailure(status: string): boolean {
   return !["passed", "manual_pending", "skipped"].includes(status);
+}
+
+function localInstallIsManual(state: ServiceState, status: unknown): boolean {
+  return ["recommend", "skip"].includes(String(state.local_install_mode || ""))
+    || ["recommend", "recommended", "skip", "skipped"].includes(String(status || ""));
 }
 
 function connectDaemonAgentErrorFromText(text: string): string {
