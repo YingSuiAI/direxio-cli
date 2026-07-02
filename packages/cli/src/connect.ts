@@ -222,7 +222,7 @@ function shouldInstallConnectPackage(options: ConnectRuntimeOptions): boolean {
   return !commandExists(options.binary ?? "direxio-connect");
 }
 
-function commandExists(command: string): boolean {
+export function commandExists(command: string): boolean {
   if (/[\\/]/.test(command)) return existsSync(command);
   if (process.platform === "win32") {
     return spawnSync("where.exe", [command], { windowsHide: true }).status === 0;

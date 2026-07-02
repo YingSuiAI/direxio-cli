@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import * as z from "zod/v4";
-import { defaultRunner, type CommandResult, type CommandRunner } from "./connect.js";
+import { commandExists, defaultRunner, type CommandResult, type CommandRunner } from "./connect.js";
 import type { ServiceConfig } from "./service-context.js";
 
 export type JsonObject = Record<string, unknown>;
@@ -145,7 +145,9 @@ export async function mcpDaemonStatus(serviceId: string, options: McpRuntimeOpti
 
 export async function installMcpDaemon(config: ServiceConfig, options: McpRuntimeOptions = {}): Promise<McpInstallReport> {
   const packageName = mcpNpmPackage(options);
-  await runCommand(options, options.npmBinary ?? "npm", ["install", "-g", packageName]);
+  if (shouldInstallMcpPackage(options)) {
+    await runCommand(options, options.npmBinary ?? "npm", ["install", "-g", packageName]);
+  }
 
   const args = mcpDaemonServiceArgs("install", config, options);
 
@@ -219,6 +221,12 @@ async function runCommand(options: McpRuntimeOptions, command: string, args: str
 
 function mcpNpmPackage(options: McpRuntimeOptions): string {
   return options.npmPackage ?? process.env.DIREXIO_MCP_NPM_PACKAGE ?? "direxio-mcp@latest";
+}
+
+function shouldInstallMcpPackage(options: McpRuntimeOptions): boolean {
+  if (options.runner) return true;
+  if (process.env.DIREXIO_MCP_FORCE_NPM_INSTALL === "1") return true;
+  return !commandExists(options.binary ?? "direxio-mcp");
 }
 
 function mcpDaemonHost(options: McpRuntimeOptions): string {
