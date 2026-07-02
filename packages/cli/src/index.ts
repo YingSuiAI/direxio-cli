@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { checkAgentProvider } from "./agents/check.js";
+import { listAgentProviderSummaries } from "./agents/registry.js";
 import { importAwsCsvCredentials, onboardAws, verifyAwsProfile } from "./aws-credentials.js";
 import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
 import { deployService, type AgentInstallMode, type DnsResolver, type DomainMode } from "./deploy.js";
@@ -57,6 +59,9 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
     if (command === "connect") {
       return await runConnect(rest, runtime, stdout);
     }
+    if (command === "agents") {
+      return await runAgents(rest, runtime, stdout);
+    }
     if (command === "status") {
       const context = resolveServiceContext({ homeDir: runtime.homeDir, service: optionValue(rest, "--service") });
       printValue(buildStatusReport(context), rest.includes("--json"), stdout);
@@ -88,7 +93,7 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
       return 0;
     }
     if (command === "skill") {
-      return runSkill(rest, runtime, stdout);
+      return await runSkill(rest, runtime, stdout);
     }
     if (command === "deploy") {
       printValue(
@@ -100,7 +105,7 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
           domainMode: domainModeValue(rest),
           agent: optionValue(rest, "--agent") ?? process.env.DIREXIO_CONNECT_AGENT ?? "codex",
           agentInstallMode: agentInstallModeValue(rest),
-          mcpTarget: optionValue(rest, "--mcp-target") ?? optionValue(rest, "--target") ?? "codex",
+          mcpTarget: optionValue(rest, "--mcp-target") ?? optionValue(rest, "--target"),
           workspace: optionValue(rest, "--workspace"),
           confirmDomainBinding: rest.includes("--confirm-domain") || process.env.CONFIRM_DOMAIN_BINDING === "1",
           confirmDnsOverwrite: rest.includes("--confirm-dns-overwrite") || process.env.DIREXIO_CONFIRM_DNS_OVERWRITE === "1" || process.env.CONFIRM_DNS_OVERWRITE === "1",
@@ -123,14 +128,14 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
   }
 }
 
-function runSkill(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): number {
+async function runSkill(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {
   const [action, ...rest] = argv;
   if (!isSkillAction(action)) {
     throw new Error("skill requires install, update, or refresh");
   }
   const agent = optionValue(rest, "--agent");
   if (!agent) throw new Error("skill requires --agent <runtime>");
-  printValue(installSkill({ agent, homeDir: runtime.homeDir, action }), rest.includes("--json"), stdout);
+  printValue(await installSkill({ agent, homeDir: runtime.homeDir, action }), rest.includes("--json"), stdout);
   return 0;
 }
 
@@ -208,6 +213,21 @@ async function runConnect(argv: string[], runtime: CliRuntime, stdout: (line: st
     return 0;
   }
   throw new Error("connect requires install, status, logs, or restart");
+}
+
+async function runAgents(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {
+  const [action, ...rest] = argv;
+  if (action === "list") {
+    printValue({ agents: await listAgentProviderSummaries() }, rest.includes("--json"), stdout);
+    return 0;
+  }
+  if (action === "check") {
+    const agent = optionValue(rest, "--agent");
+    if (!agent) throw new Error("agents check requires --agent <provider>");
+    printValue(await checkAgentProvider(agent, { runner: runtime.runner }), rest.includes("--json"), stdout);
+    return 0;
+  }
+  throw new Error("agents requires list or check");
 }
 
 async function runMcp(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {
@@ -313,6 +333,7 @@ function usage(): string {
   direxio status|destroy|update|reset-app-data
   direxio onboard aws
   direxio aws <import-csv|verify>
+  direxio agents <list|check>
   direxio connect <install|status|logs|restart>
   direxio mcp <doctor|tools|call|install|status|proxy>
   direxio skill <install|update|refresh>

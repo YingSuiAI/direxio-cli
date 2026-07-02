@@ -167,7 +167,8 @@ describe("connect runtime", () => {
       matrixToken: "matrix-token",
       matrixUser: "@agent:service.example.test",
       roomId: "!agents-real:service.example.test",
-      adminFrom: "@owner:service.example.test"
+      adminFrom: "@owner:service.example.test",
+      agentOptionsToml: 'backend = "app_server"\napp_server_url = "stdio"\nmode = "yolo"'
     });
 
     const config = readFileSync(configFile, "utf8");
@@ -186,7 +187,30 @@ describe("connect runtime", () => {
     expect(config).not.toContain("DIREXIO_CREDENTIALS_FILE");
   });
 
-  it("lets explicit agent options override codex defaults", () => {
+  it("does not own agent-specific defaults", () => {
+    const serviceDir = mkdtempSync(join(tmpdir(), "direxio-cli-connect-"));
+    const configFile = join(serviceDir, "direxio-connect", "config.toml");
+
+    writeConnectConfig({
+      configFile,
+      dataDir: join(serviceDir, "direxio-connect", "data"),
+      project: "codex-node",
+      agent: "codex",
+      workspace: join(serviceDir, "workspace"),
+      homeserver: "https://service.example.test",
+      matrixToken: "matrix-token",
+      matrixUser: "@agent:service.example.test",
+      roomId: "!agents-real:service.example.test",
+      adminFrom: "@owner:service.example.test"
+    });
+
+    const config = readFileSync(configFile, "utf8");
+    expect(config).not.toContain('backend = "app_server"');
+    expect(config).not.toContain('app_server_url = "stdio"');
+    expect(config).not.toContain('mode = "yolo"');
+  });
+
+  it("writes explicit agent options without adding provider defaults", () => {
     const serviceDir = mkdtempSync(join(tmpdir(), "direxio-cli-connect-"));
     const configFile = join(serviceDir, "direxio-connect", "config.toml");
 
@@ -205,8 +229,8 @@ describe("connect runtime", () => {
     });
 
     const config = readFileSync(configFile, "utf8");
-    expect(config).toContain('backend = "app_server"');
-    expect(config).toContain('app_server_url = "stdio"');
+    expect(config).not.toContain('backend = "app_server"');
+    expect(config).not.toContain('app_server_url = "stdio"');
     expect(config).toContain('mode = "full-auto"');
     expect(config).toContain('model = "gpt-5.5"');
     expect(config.match(/^\s*mode\s*=/gm)).toHaveLength(1);

@@ -31,9 +31,11 @@ function writeRuntimeService(home: string): { serviceDir: string; context: any; 
       as_url: "https://im.example.com",
       agent_token: "agent-secret",
       agent_room_id: "!agents:im.example.com",
+      agent_runtime: "cursor",
       agent_service_id: "im.example.com",
       agent_service_dir: serviceDir,
       agent_credentials_file: credentialsFile,
+      connect_agent: "cursor",
       connect_binary: "direxio-connect",
       connect_config: join(connectDir, "config.toml"),
       connect_install_status: "installed",
@@ -51,63 +53,74 @@ function writeRuntimeService(home: string): { serviceDir: string; context: any; 
 
 describe("runtime verification", () => {
   it("verifies connect, mcp doctor, mcp tools, and mcp smoke checks", async () => {
-    const home = mkdtempSync(join(tmpdir(), "direxio-cli-verify-"));
-    const { context, stateFile } = writeRuntimeService(home);
-    const calls: Array<{ command: string; args: string[] }> = [];
-    const fetchCalls: Array<{ url: string; body: any }> = [];
+    await withoutAgentCommandOverrides(async () => {
+      const home = mkdtempSync(join(tmpdir(), "direxio-cli-verify-"));
+      const { context, stateFile } = writeRuntimeService(home);
+      const calls: Array<{ command: string; args: string[] }> = [];
+      const fetchCalls: Array<{ url: string; body: any }> = [];
 
-    await expect(
-      verifyRuntime(context, {
-        now: () => "2026-07-01T02:03:04.000Z",
-        runner: async (command, args) => {
-          calls.push({ command, args });
-          if (command === "direxio-mcp" && args[1] === "status") {
-            return { stdout: JSON.stringify({ status: "Running" }), stderr: "", exitCode: 0 };
+      await expect(
+        verifyRuntime(context, {
+          now: () => "2026-07-01T02:03:04.000Z",
+          runner: async (command, args) => {
+            calls.push({ command, args });
+            if (command === "direxio-mcp" && args[1] === "status") {
+              return { stdout: JSON.stringify({ status: "Running" }), stderr: "", exitCode: 0 };
+            }
+            if (args[1] === "status") {
+              return {
+                stdout: `Status: Running\nWorkDir: ${dirname(join(context.serviceDir, "direxio-connect", "config.toml"))}\n`,
+                stderr: "",
+                exitCode: 0
+              };
+            }
+            if (args[1] === "logs") {
+              return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
+            }
+            return { stdout: "", stderr: "", exitCode: 0 };
+          },
+          fetch: async (input, init) => {
+            fetchCalls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+            return new Response(JSON.stringify({ room_id: "!agents:im.example.com", messages: [] }), { status: 200 });
           }
-          if (args[1] === "status") {
-            return {
-              stdout: `Status: Running\nWorkDir: ${dirname(join(context.serviceDir, "direxio-connect", "config.toml"))}\n`,
-              stderr: "",
-              exitCode: 0
-            };
-          }
-          if (args[1] === "logs") {
-            return { stdout: "direxio-connect is running\n", stderr: "", exitCode: 0 };
-          }
-          return { stdout: "", stderr: "", exitCode: 0 };
-        },
-        fetch: async (input, init) => {
-          fetchCalls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
-          return new Response(JSON.stringify({ room_id: "!agents:im.example.com", messages: [] }), { status: 200 });
+        })
+      ).resolves.toMatchObject({
+        status: "passed",
+        failed_count: 0,
+        checks: {
+          connect_daemon: "passed",
+          mcp_daemon: "passed",
+          mcp_doctor: "passed",
+          mcp_tools: "passed",
+          mcp_smoke: "passed"
         }
-      })
-    ).resolves.toMatchObject({
-      status: "passed",
-      failed_count: 0,
-      checks: {
-        connect_daemon: "passed",
-        mcp_daemon: "passed",
-        mcp_doctor: "passed",
-        mcp_tools: "passed",
-        mcp_smoke: "passed"
-      }
-    });
+      });
 
-    expect(calls).toEqual([
-      { command: "direxio-connect", args: ["daemon", "status", "--service-name", "im.example.com"] },
-      { command: "direxio-connect", args: ["daemon", "logs", "--service-name", "im.example.com", "-n", "120"] },
-      { command: "direxio-mcp", args: ["daemon", "status", "--service-name", "im.example.com", "--json"] }
-    ]);
-    expect(fetchCalls).toEqual([
-      {
-        url: "https://im.example.com/_p2p/query",
-        body: { action: "mcp.messages.list", params: { room_id: "!agents:im.example.com" } }
-      }
-    ]);
-    expect(JSON.parse(readFileSync(stateFile, "utf8")).runtime_checks.summary).toMatchObject({
-      status: "passed",
-      failed_count: 0,
-      evidence: "all runtime checks passed"
+      expect(calls).toEqual([
+        providerProbeCall("cursor"),
+        { command: "direxio-connect", args: ["daemon", "status", "--service-name", "im.example.com"] },
+        { command: "direxio-connect", args: ["daemon", "logs", "--service-name", "im.example.com", "-n", "120"] },
+        { command: "direxio-mcp", args: ["daemon", "status", "--service-name", "im.example.com", "--json"] }
+      ]);
+      expect(fetchCalls).toEqual([
+        {
+          url: "https://im.example.com/_p2p/query",
+          body: { action: "mcp.messages.list", params: { room_id: "!agents:im.example.com" } }
+        }
+      ]);
+      expect(JSON.parse(readFileSync(stateFile, "utf8")).runtime_checks.summary).toMatchObject({
+        status: "passed",
+        failed_count: 0,
+        evidence: "all runtime checks passed"
+      });
+      expect(JSON.parse(readFileSync(stateFile, "utf8")).runtime_checks.agent_provider).toMatchObject({
+        status: "passed",
+        id: "cursor",
+        label: "Cursor",
+        required_binaries: ["cursor"],
+        checks: ["skill", "mcp", "connect"],
+        binary_checks: [{ binary: "cursor", status: "passed" }]
+      });
     });
   });
 
@@ -141,3 +154,31 @@ describe("runtime verification", () => {
     });
   });
 });
+
+function providerProbeCall(binary: string): { command: string; args: string[] } {
+  if (process.platform === "win32") {
+    return { command: "where.exe", args: [binary] };
+  }
+  return { command: "sh", args: ["-lc", `command -v '${binary}'`] };
+}
+
+async function withoutAgentCommandOverrides(run: () => Promise<void>): Promise<void> {
+  const previousGeneric = process.env.DIREXIO_CONNECT_AGENT_CMD;
+  const previousCursor = process.env.DIREXIO_CURSOR_COMMAND;
+  delete process.env.DIREXIO_CONNECT_AGENT_CMD;
+  delete process.env.DIREXIO_CURSOR_COMMAND;
+  try {
+    await run();
+  } finally {
+    restoreEnv("DIREXIO_CONNECT_AGENT_CMD", previousGeneric);
+    restoreEnv("DIREXIO_CURSOR_COMMAND", previousCursor);
+  }
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}

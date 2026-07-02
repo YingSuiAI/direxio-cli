@@ -558,6 +558,24 @@ describe("deploy operation", () => {
     });
   });
 
+  it("uses the selected provider as the default MCP target", async () => {
+    const { serviceDir, state } = await runDeploymentWithLocalInstallMode("recommend", "gemini");
+
+    expect(existsSync(join(serviceDir, "mcp", "gemini.mcp.json"))).toBe(true);
+    expect(existsSync(join(serviceDir, "mcp", "codex.toml"))).toBe(false);
+    expect(state).toMatchObject({
+      agent_runtime: "gemini",
+      local_install_commands: [
+        "direxio connect install --service local-install-recommend.example.test",
+        "direxio mcp install --service local-install-recommend.example.test --target gemini",
+        "direxio verify runtime --service local-install-recommend.example.test"
+      ],
+      mcp_target_artifacts: {
+        gemini: join(serviceDir, "mcp", "gemini.mcp.json")
+      }
+    });
+  });
+
   it("skips local runtime installs while still writing credentials and connect config", async () => {
     const { calls, serviceDir, state } = await runDeploymentWithLocalInstallMode("skip");
 
@@ -574,6 +592,18 @@ describe("deploy operation", () => {
       mcp_install_status: "skipped",
       mcp_daemon_install_status: "not_installed",
       local_install_commands: []
+    });
+  });
+
+  it("uses provider-owned connect defaults when writing local config", async () => {
+    const { serviceDir, state } = await runDeploymentWithLocalInstallMode("skip", "reasonix");
+
+    const connectConfig = readFileSync(join(serviceDir, "direxio-connect", "config.toml"), "utf8");
+    expect(connectConfig).toContain('type = "reasonix"');
+    expect(connectConfig).toContain('serve_url = "http://127.0.0.1:8719"');
+    expect(state).toMatchObject({
+      agent_runtime: "reasonix",
+      connect_agent: "reasonix"
     });
   });
 
@@ -682,7 +712,7 @@ function normalizedAwsArgs(args: string[]): string[] {
   return args[0] === "--region" ? args.slice(2) : args;
 }
 
-async function runDeploymentWithLocalInstallMode(mode: "recommend" | "skip"): Promise<{
+async function runDeploymentWithLocalInstallMode(mode: "recommend" | "skip", agent = "codex"): Promise<{
   calls: Array<{ command: string; args: string[] }>;
   serviceDir: string;
   state: any;
@@ -721,8 +751,7 @@ async function runDeploymentWithLocalInstallMode(mode: "recommend" | "skip"): Pr
     serviceId,
     domain: serviceId,
     region: "us-east-1",
-    agent: "codex",
-    mcpTarget: "codex",
+    agent,
     agentInstallMode: mode,
     confirmDomainBinding: true,
     runner: async (command, args) => {

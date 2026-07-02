@@ -18,7 +18,8 @@ This file records verified migration progress. A module is marked complete only 
   - `direxio confirm real-chat --service <service_id> --evidence <text> --json`
   - `direxio confirm agent-mcp-runtime --service <service_id> --evidence <text> --runtime-probe --json`
   - status uses the migrated operation-report model and redacts initialization codes, Matrix tokens, agent tokens, and AWS session secrets.
-  - runtime verification writes `runtime_checks.connect_daemon`, `runtime_checks.mcp_daemon`, `runtime_checks.mcp_doctor`, `runtime_checks.mcp_tools`, `runtime_checks.mcp_smoke`, and `runtime_checks.summary` into `state.json`.
+  - runtime verification writes `runtime_checks.agent_provider`, `runtime_checks.connect_daemon`, `runtime_checks.mcp_daemon`, `runtime_checks.mcp_doctor`, `runtime_checks.mcp_tools`, `runtime_checks.mcp_smoke`, and `runtime_checks.summary` into `state.json`.
+  - `runtime_checks.agent_provider` resolves the selected provider plugin and probes required local binaries before reporting the agent side usable.
   - confirmation writes `user_confirmations` into `state.json`; `agent-mcp-runtime` requires `runtime_checks.summary.status=passed` plus runtime probe confirmation.
 - Existing node operations slice:
   - `direxio update --service <service_id> --json`
@@ -31,7 +32,12 @@ This file records verified migration progress. A module is marked complete only 
   - `direxio skill install --agent <runtime> --json`
   - `direxio skill update --agent <runtime> --json`
   - `direxio skill refresh --agent <runtime> --json`
-  - writes a compact agent-facing `direxio` skill into the runtime's global skill directory and points agents at the unified CLI instead of legacy shell phase scripts.
+  - writes a compact agent-facing `direxio` skill into the provider-owned global skill directory and points agents at the unified CLI instead of legacy shell phase scripts.
+- Agent provider plugin slice:
+  - `direxio agents list --json`
+  - `direxio agents check --agent <provider> --json`
+  - provider registry owns aliases, skill paths, connect defaults, command override env vars, MCP snippet files, and verification requirements for `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
+  - `direxio agents check` honors `DIREXIO_CONNECT_AGENT_CMD` and provider-specific command overrides, then probes availability with Windows `where.exe` or POSIX `command -v`.
 - Compatibility wrapper slice:
   - `scripts/orchestrate.sh` and `scripts/orchestrate.ps1` forward to `direxio deploy` by default or pass explicit arguments through to `direxio`.
   - `scripts/destroy.sh` and `scripts/destroy.ps1` forward to `direxio destroy`.
@@ -61,10 +67,10 @@ This file records verified migration progress. A module is marked complete only 
   - command invokes `direxio-mcp daemon status --service-name <service_id> --json` and fails if the underlying command fails.
 - MCP daemon install/proxy slice:
   - `direxio mcp install --service <service_id> --json`
-  - `direxio mcp install --service <service_id> --target <codex|cursor|hermes|json|openclaw|all> --json`
+  - `direxio mcp install --service <service_id> --target <provider|json|all> --json`
   - command runs `npm install -g direxio-mcp@latest`, then `direxio-mcp daemon install --service-name <service_id> --credentials-file <credentials.json> --host 127.0.0.1 --port 19757`.
   - `direxio mcp proxy` runs `direxio-mcp proxy --url http://127.0.0.1:19757/mcp`; direct CLI execution uses inherited stdio for MCP clients.
-  - target installs generate host snippets under `~/.direxio/nodes/<service_id>/mcp/` using `direxio mcp proxy --service <service_id>` as the client entrypoint.
+  - target installs generate provider-owned host snippets under `~/.direxio/nodes/<service_id>/mcp/` using `direxio mcp proxy --service <service_id>` as the client entrypoint.
 - Connect daemon management slice:
   - `direxio connect install --service <service_id> --json`
   - `direxio connect status --service <service_id> --json`

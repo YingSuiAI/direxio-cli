@@ -133,7 +133,8 @@ export function buildOperationReport(
       room_id: st.agent_room_id || "",
       runtime: st.agent_runtime || "unknown",
       service_id: st.agent_service_id || st.domain || "",
-      credentials_file: st.agent_credentials_file || ""
+      credentials_file: st.agent_credentials_file || "",
+      provider: st.runtime_checks?.agent_provider || { status: "not_run" }
     },
     gates: {
       automated: phaseStatuses,

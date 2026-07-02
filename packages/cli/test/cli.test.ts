@@ -75,6 +75,64 @@ describe("direxio CLI", () => {
     });
   });
 
+  it("lists supported agent provider plugins", async () => {
+    const stdout: string[] = [];
+
+    const code = await runCli(["agents", "list", "--json"], {
+      stdout: (line) => stdout.push(line),
+      stderr: () => {}
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      agents: expect.arrayContaining([
+        expect.objectContaining({
+          id: "codex",
+          connect_agent: "codex",
+          skill_path: ".codex/skills/direxio",
+          mcp_config_files: ["codex.toml"]
+        }),
+        expect.objectContaining({
+          id: "cursor",
+          required_binaries: ["cursor"]
+        }),
+        expect.objectContaining({
+          id: "gemini",
+          command_env: "DIREXIO_GEMINI_COMMAND"
+        })
+      ])
+    });
+  });
+
+  it("checks selected agent provider dependencies", async () => {
+    await withoutAgentCommandOverrides(async () => {
+      const stdout: string[] = [];
+      const commands: Array<{ command: string; args: string[] }> = [];
+
+      const code = await runCli(["agents", "check", "--agent", "cursor", "--json"], {
+        stdout: (line) => stdout.push(line),
+        stderr: () => {},
+        runner: async (command, args) => {
+          commands.push({ command, args });
+          return { stdout: "cursor\n", stderr: "", exitCode: 0 };
+        }
+      });
+
+      expect(code).toBe(0);
+      expect(commands).toEqual([providerProbeCall("cursor")]);
+      expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+        status: "passed",
+        id: "cursor",
+        binary_checks: [
+          {
+            binary: "cursor",
+            status: "passed"
+          }
+        ]
+      });
+    });
+  });
+
   it("routes AWS CSV import through the public CLI", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-aws-"));
     const csv = join(home, "keys.csv");
@@ -647,3 +705,31 @@ describe("direxio CLI", () => {
     expect(stderr.join("\n")).toContain("waiting for DNS A record wait-dns.example.test -> 203.0.113.91");
   });
 });
+
+function providerProbeCall(binary: string): { command: string; args: string[] } {
+  if (process.platform === "win32") {
+    return { command: "where.exe", args: [binary] };
+  }
+  return { command: "sh", args: ["-lc", `command -v '${binary}'`] };
+}
+
+async function withoutAgentCommandOverrides(run: () => Promise<void>): Promise<void> {
+  const previousGeneric = process.env.DIREXIO_CONNECT_AGENT_CMD;
+  const previousCursor = process.env.DIREXIO_CURSOR_COMMAND;
+  delete process.env.DIREXIO_CONNECT_AGENT_CMD;
+  delete process.env.DIREXIO_CURSOR_COMMAND;
+  try {
+    await run();
+  } finally {
+    restoreEnv("DIREXIO_CONNECT_AGENT_CMD", previousGeneric);
+    restoreEnv("DIREXIO_CURSOR_COMMAND", previousCursor);
+  }
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}

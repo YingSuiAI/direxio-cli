@@ -15,6 +15,8 @@ direxio status --service <service-id>
 direxio update --service <service-id>
 direxio reset-app-data --service <service-id> --confirm
 direxio destroy --service <service-id>
+direxio agents list
+direxio agents check --agent codex
 direxio connect install --service <service-id>
 direxio connect status
 direxio mcp install --service <service-id> --target codex
@@ -28,6 +30,8 @@ direxio skill install --agent codex
 ```
 
 Deploy uses `--dns auto` by default: if the AWS account has a matching public Route53 hosted zone, `direxio` writes the A record there; otherwise it records the required user-managed DNS A record and exits with code `2` until the domain resolves to the Elastic IP. `--agent-install auto` is also the default. Use `--agent-install recommend` to write files and print install commands, or `--agent-install skip` to write credentials/config only.
+
+Agent compatibility is implemented through built-in provider plugins. `direxio agents list` shows each provider's skill path, connect type, MCP config files, and required local binaries. `direxio agents check --agent <provider>` and `direxio verify runtime` probe the selected provider's executable dependencies before claiming the runtime is usable. Supported providers are `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
 
 Internally, the product keeps deep modules:
 

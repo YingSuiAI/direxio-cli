@@ -46,7 +46,14 @@ function writeState(home: string): string {
         }
       },
       runtime_checks: {
-        summary: { status: "passed" }
+        summary: { status: "passed" },
+        agent_provider: {
+          status: "passed",
+          id: "cursor",
+          label: "Cursor",
+          required_binaries: ["cursor"],
+          checks: ["skill", "mcp", "connect"]
+        }
       },
       resources: {
         instance_id: "i-report",
@@ -100,6 +107,11 @@ describe("service state reports", () => {
       security: {
         secrets_included: false
       }
+    });
+    expect(report.agent.provider).toMatchObject({
+      status: "passed",
+      id: "cursor",
+      label: "Cursor"
     });
     expect(report.gates.user_confirmation_details.app_initialization.evidence).toContain("<redacted>");
     expect(report.gates.user_confirmation_details.real_chat.evidence).toContain("<redacted>");

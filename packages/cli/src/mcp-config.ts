@@ -1,5 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { listAgentProviders, resolveAgentProvider } from "./agents/registry.js";
+import type { AgentProvider } from "./agents/types.js";
 import { installMcpDaemon, type McpInstallReport, type McpRuntimeOptions } from "./mcp.js";
 import type { ServiceConfig } from "./service-context.js";
 
@@ -14,7 +16,7 @@ export async function installMcpTarget(
   options: McpRuntimeOptions = {}
 ): Promise<McpTargetInstallReport> {
   const daemon = await installMcpDaemon(config, options);
-  const artifacts = writeMcpTargetArtifacts(config, target);
+  const artifacts = await writeMcpTargetArtifacts(config, target);
   return {
     ...daemon,
     target,
@@ -22,22 +24,46 @@ export async function installMcpTarget(
   };
 }
 
-export function writeMcpTargetArtifacts(config: ServiceConfig, target: string): Record<string, string> {
+export async function writeMcpTargetArtifacts(config: ServiceConfig, target: string): Promise<Record<string, string>> {
   const normalizedTarget = target.toLowerCase();
-  const targets = normalizedTarget === "all" ? ["codex", "cursor", "hermes", "json", "openclaw"] : [normalizedTarget];
   const artifacts: Record<string, string> = {};
   const mcpDir = join(config.serviceDir, "mcp");
   mkdirSync(mcpDir, { recursive: true });
 
-  for (const item of targets) {
-    if (item === "codex") artifacts.codex = writeCodexToml(config, mcpDir);
-    else if (item === "cursor") artifacts.cursor = writeMcpServersJson(config, join(mcpDir, "cursor.mcp.json"));
-    else if (item === "hermes") artifacts.hermes = writeMcpServersJson(config, join(mcpDir, "hermes.mcp.json"));
-    else if (item === "json") artifacts.json = writeMcpServersJson(config, join(mcpDir, "mcp-servers.json"));
-    else if (item === "openclaw") artifacts.openclaw = writeOpenClawServer(config, mcpDir);
-    else throw new Error(`unsupported MCP target: ${target}`);
+  if (normalizedTarget === "json") {
+    return { json: writeMcpServersJson(config, join(mcpDir, "mcp-servers.json")) };
+  }
+  if (normalizedTarget === "openclaw") {
+    return { openclaw: writeOpenClawServer(config, mcpDir) };
+  }
+  if (normalizedTarget === "hermes") {
+    return { hermes: writeMcpServersJson(config, join(mcpDir, "hermes.mcp.json")) };
+  }
+
+  const providers = normalizedTarget === "all"
+    ? await listAgentProviders()
+    : [await resolveAgentProvider(normalizedTarget)];
+  for (const provider of providers) {
+    for (const fileName of provider.mcp.configFiles) {
+      artifacts[artifactKey(provider, fileName)] = writeProviderMcpArtifact(config, mcpDir, fileName);
+    }
   }
   return artifacts;
+}
+
+function writeProviderMcpArtifact(config: ServiceConfig, mcpDir: string, fileName: string): string {
+  if (fileName === "codex.toml") return writeCodexToml(config, mcpDir);
+  if (fileName === "openclaw-server.json") return writeOpenClawServer(config, mcpDir);
+  return writeMcpServersJson(config, join(mcpDir, fileName));
+}
+
+function artifactKey(provider: AgentProvider, fileName: string): string {
+  if (fileName === "mcp-servers.json") return "json";
+  if (fileName === "openclaw-server.json") return "openclaw";
+  if (fileName.endsWith(".mcp.json")) return fileName.slice(0, -".mcp.json".length);
+  if (fileName.endsWith(".toml")) return fileName.slice(0, -".toml".length);
+  if (fileName.endsWith(".json")) return fileName.slice(0, -".json".length);
+  return provider.id;
 }
 
 function writeCodexToml(config: ServiceConfig, mcpDir: string): string {

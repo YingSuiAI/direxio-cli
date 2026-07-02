@@ -18,6 +18,9 @@ direxio reset-app-data
 direxio verify runtime
 direxio confirm app-initialization
 
+direxio agents list
+direxio agents check --agent <provider>
+
 direxio connect install
 direxio connect status
 direxio connect logs
@@ -43,6 +46,21 @@ direxio use <service-id>
 `packages/connect-runtime` is the integration layer for the Go `direxio-connect` runtime. It manages Matrix bridge config, daemon install/status/logs, agent runtime selection, and service-scoped bridge verification.
 
 `packages/mcp-runtime` is the integration layer for the TypeScript `direxio-mcp` runtime. It manages MCP HTTP endpoint setup, stdio proxy config, tool discovery, direct CLI tool calls, and MCP host snippets.
+
+## Agent Provider Plugins
+
+Agent compatibility is modeled as built-in provider modules under `packages/cli/src/agents/providers/`. Each provider owns its skill path, connect agent type, command override env var, default connect TOML, MCP config files, aliases, and runtime verification requirements.
+
+Supported providers are `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
+
+User-facing commands:
+
+- `direxio agents list` lists every provider plugin and its owned artifacts.
+- `direxio agents check --agent <provider>` probes the selected provider executable through the platform-native command lookup.
+- `direxio skill install --agent <provider>` writes only that provider's skill.
+- `direxio mcp install --target <provider>` writes only that provider's MCP snippets.
+- `direxio deploy --agent <provider>` writes that provider's connect config defaults and records it in service state.
+- `direxio verify runtime` checks `runtime_checks.agent_provider` before connect and MCP checks.
 
 ## MCP Strategy
 

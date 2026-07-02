@@ -124,7 +124,6 @@ export function writeConnectConfig(input: ConnectConfigInput): void {
   mkdirSync(input.dataDir, { recursive: true });
 
   const agentOptionsToml = input.agentOptionsToml?.trim() ?? "";
-  const defaultAgentOptionsToml = defaultAgentOptions(input.agent, agentOptionsToml);
   const lines = [
     'language = "zh"',
     `data_dir = "${tomlEscape(input.dataDir)}"`
@@ -144,7 +143,6 @@ export function writeConnectConfig(input: ConnectConfigInput): void {
     `work_dir = "${tomlEscape(input.workspace)}"`
   );
   if (input.agentCmd) lines.push(`cmd = "${tomlEscape(input.agentCmd)}"`);
-  if (defaultAgentOptionsToml) lines.push(defaultAgentOptionsToml);
   if (agentOptionsToml) lines.push(agentOptionsToml);
   lines.push(
     "",
@@ -302,15 +300,6 @@ function parseField(text: string, field: string): string {
   return pattern.exec(text)?.[1]?.trim() ?? "";
 }
 
-function defaultAgentOptions(agent: string, explicitToml: string): string {
-  if (agent !== "codex") return "";
-  const lines = [];
-  if (!tomlHasKey(explicitToml, "backend")) lines.push('backend = "app_server"');
-  if (!tomlHasKey(explicitToml, "app_server_url")) lines.push('app_server_url = "stdio"');
-  if (!tomlHasKey(explicitToml, "mode")) lines.push('mode = "yolo"');
-  return lines.join("\n");
-}
-
 function speechConfigToml(speech?: ConnectConfigInput["speech"]): string {
   if (!speech?.enabled && !speech?.apiKey) return "";
   const lines = [
@@ -326,10 +315,6 @@ function speechConfigToml(speech?: ConnectConfigInput["speech"]): string {
     if (speech.model) lines.push(`model = "${tomlEscape(speech.model)}"`);
   }
   return lines.join("\n");
-}
-
-function tomlHasKey(toml: string, key: string): boolean {
-  return new RegExp(`^\\s*${key}\\s*=`, "m").test(toml);
 }
 
 function tomlEscape(value: string): string {

@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { promises as dnsPromises } from "node:dns";
+import { resolveAgentProvider } from "./agents/registry.js";
+import type { AgentProvider } from "./agents/types.js";
 import { renderCloudInitUserData } from "./cloud-init.js";
 import { connectInstall, defaultRunner, writeConnectConfig, type CommandResult, type CommandRunner } from "./connect.js";
 import { installMcpTarget, writeMcpTargetArtifacts } from "./mcp-config.js";
@@ -89,6 +91,8 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
   if (!options.confirmDomainBinding) {
     throw new Error("deploy requires confirmed domain binding");
   }
+  const agentProvider = await resolveAgentProvider(options.agent ?? "codex");
+  const normalizedOptions: DeployOptions = { ...options, region, agent: agentProvider.id };
 
   const serviceDir = join(options.homeDir ?? homedir(), ".direxio", "nodes", serviceId);
   const context: ServiceContext = {
@@ -97,24 +101,24 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
     credentialsFile: join(serviceDir, "credentials.json")
   };
   const ts = options.now?.() ?? new Date().toISOString();
-  const state = loadOrInitializeState({ ...options, region }, context, domain, ts);
+  const state = loadOrInitializeState(normalizedOptions, context, domain, ts);
   writeServiceState(context, state);
 
-  await runAws(options, ["sts", "get-caller-identity"]);
+  await runAws(normalizedOptions, ["sts", "get-caller-identity"]);
   markPhaseDone(state, "S0_PREREQ_AWS", ts, "AWS caller identity verified");
   markPhaseDone(state, "S1_PREFLIGHT", ts, "deployment inputs validated");
   markPhaseDone(state, "S2_DOMAIN", ts, "production domain binding confirmed");
   writeServiceState(context, state);
 
-  await provisionAwsResources(options, context, state, domain);
+  await provisionAwsResources(normalizedOptions, context, state, domain);
   markPhaseDone(state, "S3_PROVISION", ts, "AWS resources provisioned");
   writeServiceState(context, state);
 
-  await waitForHealthz(options, domain);
+  await waitForHealthz(normalizedOptions, domain);
   markPhaseDone(state, "S4_BOOTSTRAP_STACK", ts, `healthz 200 @ https://${domain}`);
   writeServiceState(context, state);
 
-  const bootstrap = await bootstrapRemote(options, state, domain);
+  const bootstrap = await bootstrapRemote(normalizedOptions, state, domain);
   Object.assign(state, {
     password: bootstrap.password,
     access_token: bootstrap.access_token,
@@ -126,10 +130,10 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
   writeServiceState(context, state);
   writeCredentials(context, domain, bootstrap, state.agent_node_id);
 
-  const matrixSession = await createMatrixSession(options, domain, bootstrap.agent_token, `direxio-connect-${serviceId}`);
-  writeLocalWiring(options, context, state, domain, bootstrap, matrixSession);
+  const matrixSession = await createMatrixSession(normalizedOptions, domain, bootstrap.agent_token, `direxio-connect-${serviceId}`);
+  writeLocalWiring(normalizedOptions, context, state, domain, bootstrap, matrixSession, agentProvider);
   const serviceConfig = serviceConfigFromDeploy(context, domain, bootstrap, String(state.agent_node_id));
-  const localWiringEvidence = await applyLocalInstallMode(options, context, state, serviceConfig);
+  const localWiringEvidence = await applyLocalInstallMode(normalizedOptions, context, state, serviceConfig);
   writeServiceState(context, state);
   markPhaseDone(state, "S6_WIRE_LOCAL", ts, localWiringEvidence);
   markPhaseDone(state, "S7_VERIFY_E2E", ts, "deployment automation completed");
@@ -579,22 +583,30 @@ function writeLocalWiring(
   state: ServiceState,
   domain: string,
   bootstrap: BootstrapCredentials,
-  matrixSession: MatrixSession
+  matrixSession: MatrixSession,
+  provider: AgentProvider
 ): void {
   const connectDir = join(context.serviceDir, "direxio-connect");
+  const agentCommand = provider.connect.commandEnv ? process.env[provider.connect.commandEnv] : undefined;
   mkdirSync(connectDir, { recursive: true });
   writeConnectConfig({
     configFile: join(connectDir, "config.toml"),
     dataDir: join(connectDir, "data"),
     project: String(state.agent_node_id),
-    agent: options.agent ?? "codex",
+    agent: provider.connect.agentType,
     workspace: options.workspace ?? process.cwd(),
     homeserver: matrixSession.homeserver || `https://${domain}`,
     matrixToken: matrixSession.access_token,
     matrixUser: matrixSession.user_id,
     roomId: bootstrap.agent_room_id,
-    adminFrom: `@owner:${domain}`
+    adminFrom: `@owner:${domain}`,
+    agentCmd: agentCommand,
+    agentOptionsToml: provider.connect.defaultOptionsToml
   });
+  state.agent_runtime = provider.id;
+  state.connect_agent = provider.connect.agentType;
+  state.connect_provider = provider.id;
+  state.connect_required_binaries = provider.connect.requiredBinaries;
   state.connect_matrix_user = matrixSession.user_id;
   state.connect_matrix_device = matrixSession.device_id;
   state.connect_matrix_homeserver = matrixSession.homeserver;
@@ -634,7 +646,7 @@ async function applyLocalInstallMode(
     state.connect_install_status = "recommended";
     state.mcp_install_status = "recommended";
     state.mcp_daemon_install_status = "not_installed";
-    state.mcp_target_artifacts = writeMcpTargetArtifacts(serviceConfig, target);
+    state.mcp_target_artifacts = await writeMcpTargetArtifacts(serviceConfig, target);
     return "local credentials and config generated; install commands recommended";
   }
 

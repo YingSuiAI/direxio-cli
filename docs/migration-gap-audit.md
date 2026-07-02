@@ -48,5 +48,8 @@ This audit compares the old deployer expectations against the unified `direxio` 
 ## Skill And Agent Surface
 
 - Status: migrated.
-- Current behavior: `direxio skill install|update|refresh --agent <runtime>` writes agent-facing `SKILL.md` files that point to `direxio` commands instead of legacy phase scripts.
+- Current behavior: built-in agent provider plugins own each platform's skill path, connect type/defaults, MCP snippets, command override env vars, aliases, and verification requirements. `direxio agents list` reports the plugin matrix. `direxio agents check --agent <provider>` probes local executable availability before runtime verification marks the provider usable.
+- Skill behavior: `direxio skill install|update|refresh --agent <runtime>` writes agent-facing `SKILL.md` files that point to `direxio` commands instead of legacy phase scripts.
+- MCP behavior: `direxio mcp install --target <provider>` writes only the selected provider's MCP snippets; `--target all` writes every provider artifact.
+- Connect behavior: deploy local wiring resolves the selected provider and writes provider-owned connect defaults, including special options such as `reasonix.serve_url` and `tmux.session`.
 - Supported targets: `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.

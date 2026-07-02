@@ -1,4 +1,5 @@
 import { dirname, join, normalize } from "node:path";
+import { checkAgentProvider } from "./agents/check.js";
 import { connectLogs, connectStatus, type CommandRunner } from "./connect.js";
 import { callMcpTool, createDoctorReport, listMcpTools, mcpDaemonStatus } from "./mcp.js";
 import { loadServiceConfigFromContext, type ServiceContext } from "./service-context.js";
@@ -26,6 +27,7 @@ export async function verifyRuntime(
   const state = readServiceState(context);
   const now = options.now?.() ?? new Date().toISOString();
 
+  await recordCheck(state, "agent_provider", () => verifyAgentProvider(state, options, now), now);
   await recordCheck(state, "connect_daemon", () => verifyConnectDaemon(context, state, options, now), now);
   await recordCheck(state, "mcp_daemon", () => verifyMcpDaemon(context, state, options, now), now);
   await recordCheck(state, "mcp_doctor", () => verifyMcpDoctor(context, state, now), now);
@@ -33,6 +35,7 @@ export async function verifyRuntime(
   await recordCheck(state, "mcp_smoke", () => verifyMcpSmoke(context, state, options, now), now);
 
   const checks = {
+    agent_provider: checkStatus(state, "agent_provider"),
     connect_daemon: checkStatus(state, "connect_daemon"),
     mcp_daemon: checkStatus(state, "mcp_daemon"),
     mcp_doctor: checkStatus(state, "mcp_doctor"),
@@ -52,6 +55,17 @@ export async function verifyRuntime(
   };
   writeServiceState(context, state);
   return summary;
+}
+
+async function verifyAgentProvider(state: ServiceState, options: RuntimeVerifyOptions, now: string): Promise<void> {
+  const report = await checkAgentProvider(String(state.connect_provider || state.agent_runtime || state.connect_agent || "codex"), {
+    runner: options.runner
+  });
+  state.runtime_checks.agent_provider = {
+    ...report,
+    ts: now,
+    evidence: report.status === "passed" ? "selected agent provider dependencies are available" : "selected agent provider dependencies are missing"
+  };
 }
 
 async function verifyConnectDaemon(
