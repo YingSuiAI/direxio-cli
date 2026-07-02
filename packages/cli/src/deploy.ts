@@ -70,6 +70,9 @@ interface MatrixSession {
   homeserver: string;
 }
 
+const DEFAULT_ROOT_VOLUME_GB = 50;
+const DEFAULT_ROOT_DEVICE_NAME = "/dev/sda1";
+
 const phases = [
   "S0_PREREQ_AWS",
   "S1_PREFLIGHT",
@@ -265,6 +268,8 @@ async function provisionAwsResources(options: DeployOptions, context: ServiceCon
     writeServiceState(context, state);
   }
   if (!stringValue(state.resources.instance_id)) {
+    state.resources.root_volume_gb = DEFAULT_ROOT_VOLUME_GB;
+    writeServiceState(context, state);
     const instance = parseJsonObject((await runAws(options, [
       "ec2",
       "run-instances",
@@ -278,6 +283,8 @@ async function provisionAwsResources(options: DeployOptions, context: ServiceCon
       sgId,
       "--user-data",
       `file://${state.resources.user_data}`,
+      "--block-device-mappings",
+      rootBlockDeviceMappingsJson(),
       "--count",
       "1"
     ])).stdout);
@@ -296,6 +303,19 @@ async function provisionAwsResources(options: DeployOptions, context: ServiceCon
   }
 
   await configureDns(options, context, state, domain);
+}
+
+function rootBlockDeviceMappingsJson(): string {
+  return JSON.stringify([
+    {
+      DeviceName: DEFAULT_ROOT_DEVICE_NAME,
+      Ebs: {
+        VolumeSize: DEFAULT_ROOT_VOLUME_GB,
+        VolumeType: "gp3",
+        DeleteOnTermination: true
+      }
+    }
+  ]);
 }
 
 async function createSecurityGroup(options: DeployOptions, domain: string): Promise<string> {

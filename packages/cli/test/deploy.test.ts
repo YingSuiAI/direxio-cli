@@ -132,6 +132,7 @@ describe("deploy operation", () => {
       resources: {
         instance_id: "i-deploy",
         root_volume_id: "vol-deploy-root",
+        root_volume_gb: 50,
         eip_id: "eipalloc-deploy",
         public_ip: "203.0.113.42",
         sg_id: "sg-deploy",
@@ -183,6 +184,18 @@ describe("deploy operation", () => {
     expect(runInstances?.args).toContain("1");
     expect(runInstances?.args).not.toContain("--min-count");
     expect(runInstances?.args).not.toContain("--max-count");
+    const runInstancesArgs = normalizedAwsArgs(runInstances?.args ?? []);
+    const blockDeviceMappings = JSON.parse(runInstancesArgs[runInstancesArgs.indexOf("--block-device-mappings") + 1] ?? "null");
+    expect(blockDeviceMappings).toEqual([
+      {
+        DeviceName: "/dev/sda1",
+        Ebs: {
+          VolumeSize: 50,
+          VolumeType: "gp3",
+          DeleteOnTermination: true
+        }
+      }
+    ]);
     const userDataArg = runInstances?.args[runInstances.args.indexOf("--user-data") + 1] ?? "";
     expect(userDataArg).toMatch(/^file:\/\//);
     const userData = readFileSync(userDataArg.replace(/^file:\/\//, ""), "utf8");

@@ -36,7 +36,7 @@ direxio verify runtime --service <service-id>
 direxio skill install --agent codex
 ```
 
-`--dns auto` is the default. A matching public Route53 hosted zone is used automatically; otherwise `direxio` records the user-managed DNS A record and exits with code `2` until the domain resolves. `--agent-install auto` installs and verifies connect/MCP by default; `recommend` writes files and next commands; `skip` writes credentials/config only.
+`--dns auto` is the default. A matching public Route53 hosted zone is used automatically; otherwise `direxio` records the user-managed DNS A record and exits with code `2` until the domain resolves. New EC2 deployments use a 50 GiB gp3 root EBS volume by default. `--agent-install auto` installs and verifies connect/MCP by default; `recommend` writes files and next commands; `skip` writes credentials/config only.
 
 Agent support is provider-plugin based. `direxio agents list` prints the provider-owned skill path, connect type, MCP snippets, and required binaries. `direxio agents check --agent <provider>` probes the selected provider executable before runtime verification claims the local agent side is usable. Supported providers: `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
 
