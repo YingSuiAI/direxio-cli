@@ -62,7 +62,7 @@ export function renderLightsailUserData(input: CloudInitInput): string {
     `MESSAGE_SERVER_IMAGE=${input.messageServerImage ?? "direxio/message-server:latest"}`
   ].join("\n");
   return `#!/usr/bin/env bash
-set -euxo pipefail
+set -eu
 
 export DEBIAN_FRONTEND=noninteractive
 mkdir -p /var/direxio-message-server

@@ -382,6 +382,8 @@ describe("deploy operation", () => {
     expect(readFileSync(join(serviceDir, "direxio-key-lightsail-example-test.pem"), "utf8")).toBe("-----BEGIN RSA PRIVATE KEY-----\nLIGHTSAIL_KEY\n-----END RSA PRIVATE KEY-----\n");
     const lightsailUserData = readFileSync(state.resources.user_data, "utf8");
     expect(lightsailUserData).toMatch(/^#!\/usr\/bin\/env bash/);
+    expect(lightsailUserData).toContain("set -eu");
+    expect(lightsailUserData.split(/\r?\n/).slice(0, 5).join("\n")).not.toContain("pipefail");
     expect(lightsailUserData).not.toContain("#cloud-config");
     expect(lightsailUserData).toContain("cat > /var/direxio-message-server/docker-compose.yml <<'DIREXIO_COMPOSE'");
     expect(lightsailUserData).toContain("docker compose --env-file .env up -d");
