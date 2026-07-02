@@ -18,8 +18,15 @@ describe("skill installation", () => {
 
     const skillFile = join(home, ".codex", "skills", "direxio", "SKILL.md");
     expect(existsSync(skillFile)).toBe(true);
-    expect(readFileSync(skillFile, "utf8")).toContain("direxio deploy");
-    expect(readFileSync(skillFile, "utf8")).toContain("direxio verify runtime");
+    const skill = readFileSync(skillFile, "utf8");
+    expect(skill).toContain("direxio --help");
+    expect(skill).toContain("direxio skill --help");
+    expect(skill).toContain("The first deploy prints a confirmation checklist");
+    expect(skill).toContain("confirm_command");
+    expect(skill).toContain("direxio verify runtime");
+    expect(skill).toContain("direxio mcp tools");
+    expect(skill).toContain("direxio mcp call send_message");
+    expect(skill).toContain("Never print Matrix access tokens");
   });
 
   it("installs every provider skill at the provider-owned path", async () => {

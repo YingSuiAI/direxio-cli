@@ -7,6 +7,8 @@ Unified local product surface for deploying Direxio, wiring the Matrix agent bri
 `direxio` is the single command users and agent skills should call:
 
 ```bash
+direxio --help
+direxio skill --help
 direxio onboard aws
 direxio aws import-csv <aws-access-key.csv> --profile direxio-deployer --region <aws-region>
 direxio aws verify --profile direxio-deployer
@@ -41,7 +43,7 @@ Agent compatibility is implemented through built-in provider plugins. `direxio a
 Paste this single instruction into an agent when you want it to install Direxio support for its own runtime:
 
 ```text
-Install the Direxio skill for this agent: run `npx -y @direxio/cli@latest agents list --json`, choose the provider that matches this runtime, then run `npx -y @direxio/cli@latest skill install --agent <provider> --json` and read the generated `SKILL.md` before using Direxio.
+Install the Direxio skill for this agent: run `npx -y @direxio/cli@latest --help`, then `npx -y @direxio/cli@latest skill --help`, run `npx -y @direxio/cli@latest agents list --json`, choose the provider that matches this runtime, run `npx -y @direxio/cli@latest skill install --agent <provider> --json`, and read the generated `SKILL.md` before deploying or using Direxio.
 ```
 
 Use only the current agent provider, not every provider. Common provider values:
@@ -53,7 +55,9 @@ npx -y @direxio/cli@latest skill install --agent gemini --json
 npx -y @direxio/cli@latest skill install --agent claudecode --json
 ```
 
-If `direxio` is already installed globally, the equivalent command is `direxio skill install --agent <provider> --json`. MCP client snippets are service-scoped and should be installed after a service exists with `direxio mcp install --service <service-id> --target <provider>`.
+If `direxio` is already installed globally, the equivalent command is `direxio skill install --agent <provider> --json`. Use `direxio skill --help` whenever the agent needs to rediscover the bootstrap flow. The generated skill is intentionally a compact runbook: it tells the agent how to inspect `direxio --help`, deploy with the confirmation checklist, verify runtime readiness, wire `direxio-connect`, install MCP snippets, and use MCP business tools such as `list_contacts`, `search_rooms`, `list_messages`, `send_message`, and channel comment operations.
+
+MCP client snippets are service-scoped and should be installed after a service exists with `direxio mcp install --service <service-id> --target <provider>`.
 
 Internally, the product keeps deep modules:
 

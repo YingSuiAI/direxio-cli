@@ -43,7 +43,7 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
   const stderr = runtime.stderr ?? ((line: string) => console.error(line));
   try {
     const [command, ...rest] = argv;
-    if (!command || command === "--help" || command === "-h") {
+    if (!command || command === "--help" || command === "-h" || command === "help") {
       stdout(usage());
       return 0;
     }
@@ -165,6 +165,10 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
 
 async function runSkill(argv: string[], runtime: CliRuntime, stdout: (line: string) => void): Promise<number> {
   const [action, ...rest] = argv;
+  if (!action || action === "--help" || action === "-h" || action === "help" || rest.includes("--help") || rest.includes("-h")) {
+    stdout(skillUsage());
+    return 0;
+  }
   if (!isSkillAction(action)) {
     throw new Error("skill requires install, update, or refresh");
   }
@@ -419,15 +423,49 @@ function shellArg(value: string): string {
 
 function usage(): string {
   return `Usage:
-  direxio deploy [--cloud lightsail|ec2] [--dns auto|user|route53] [--agent-install auto|recommend|skip] [--confirm-deploy|--yes]
-  direxio status|destroy|update|reset-app-data
+  direxio --help
+  direxio deploy --service <id> --domain <domain> --region <aws-region> [--cloud lightsail|ec2] [--dns auto|user|route53] [--agent-install auto|recommend|skip] [--confirm-deploy|--yes]
+  direxio status --service <id>
+  direxio update|reset-app-data|destroy --service <id>
   direxio onboard aws
-  direxio aws <import-csv|verify>
-  direxio agents <list|check>
-  direxio connect <install|status|logs|restart>
-  direxio mcp <doctor|tools|call|install|status|proxy>
-  direxio skill <install|update|refresh>
-  direxio use <service-id>`;
+  direxio aws import-csv <aws-access-key.csv> --profile <profile> --region <aws-region>
+  direxio aws verify --profile <profile>
+  direxio agents list [--json]
+  direxio agents check --agent <provider> [--json]
+  direxio connect install|status|logs|restart --service <id>
+  direxio mcp tools [--json]
+  direxio mcp doctor|install|status|proxy --service <id>
+  direxio mcp call <tool-name> --service <id> --json '<input>'
+  direxio skill install|update|refresh --agent <provider>
+  direxio skill --help
+  direxio use <service-id>
+
+Deploy without --confirm-deploy prints the confirmation checklist first and exits with code 2. Run the returned confirm_command after the user confirms the checklist.`;
+}
+
+function skillUsage(): string {
+  return `Usage:
+  direxio skill install --agent <provider> [--json]
+  direxio skill update --agent <provider> [--json]
+  direxio skill refresh --agent <provider> [--json]
+
+Purpose:
+  Writes the final Direxio SKILL.md into the selected agent provider's skill directory.
+  The generated skill explains deployment, deploy confirmation, local connect wiring,
+  MCP setup, MCP business tools, runtime verification, and safety rules.
+
+Find the provider:
+  direxio agents list --json
+  direxio agents check --agent <provider> --json
+
+Common providers:
+  codex, cursor, gemini, claudecode, copilot, opencode, qoder, reasonix, tmux
+
+Examples:
+  npx -y @direxio/cli@latest skill install --agent codex --json
+  direxio skill update --agent cursor --json
+  direxio mcp install --service <service-id> --target <provider> --json
+  direxio --help`;
 }
 
 function runInheritedProcess(command: string, args: string[]): Promise<number> {

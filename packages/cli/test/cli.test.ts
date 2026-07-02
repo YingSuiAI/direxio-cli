@@ -600,6 +600,39 @@ describe("direxio CLI", () => {
     expect(readFileSync(join(home, ".codex", "skills", "direxio", "SKILL.md"), "utf8")).toContain("direxio mcp");
   });
 
+  it("prints skill-specific help for agent bootstrap", async () => {
+    const stdout: string[] = [];
+
+    const code = await runCli(["skill", "--help"], {
+      stdout: (line) => stdout.push(line),
+      stderr: () => {}
+    });
+
+    expect(code).toBe(0);
+    const output = stdout.join("\n");
+    expect(output).toContain("direxio skill install --agent <provider>");
+    expect(output).toContain("direxio agents list --json");
+    expect(output).toContain("MCP business tools");
+    expect(output).toContain("npx -y @direxio/cli@latest skill install --agent codex --json");
+    expect(output).toContain("direxio --help");
+  });
+
+  it("prints top-level help with deploy confirmation guidance", async () => {
+    const stdout: string[] = [];
+
+    const code = await runCli(["--help"], {
+      stdout: (line) => stdout.push(line),
+      stderr: () => {}
+    });
+
+    expect(code).toBe(0);
+    const output = stdout.join("\n");
+    expect(output).toContain("direxio deploy --service <id>");
+    expect(output).toContain("direxio skill --help");
+    expect(output).toContain("confirmation checklist");
+    expect(output).toContain("confirm_command");
+  });
+
   it("prints a deploy confirmation checklist before creating cloud resources", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-plan-"));
     const stdout: string[] = [];
