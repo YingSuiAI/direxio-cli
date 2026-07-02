@@ -12,11 +12,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Adam0120/direxio-cli.git"
+    "url": "git+https://github.com/YingSuiAI/direxio-cli.git"
   },
-  "homepage": "https://github.com/Adam0120/direxio-cli#readme",
+  "homepage": "https://github.com/YingSuiAI/direxio-cli#readme",
   "bugs": {
-    "url": "https://github.com/Adam0120/direxio-cli/issues"
+    "url": "https://github.com/YingSuiAI/direxio-cli/issues"
   },
   "engines": {
     "node": ">=20"
