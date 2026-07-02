@@ -506,6 +506,7 @@ function deployUsage(): string {
 Behavior:
   Without --confirm-deploy, deploy performs preflight discovery only, prints a confirmation checklist, and exits with code 2 before creating cloud resources.
   Review selected_cloud, Lightsail availability zone or EC2 fallback, DNS mode, agent install mode, estimated billing notes, and confirm_command with the user.
+  Successful deploy output includes init_password, the one-time app initialization password. Deploy progress streams to stderr so JSON stdout remains parseable.
   Lightsail is the default. The checklist queries Free Tier usage, Lightsail bundles, and availability zones before selecting EC2 fallback.
   --dns auto uses Route53 when a matching public hosted zone exists; otherwise it waits for user-managed DNS.
   --agent-install auto installs and verifies direxio-connect and direxio-mcp before the deployment is considered ready.

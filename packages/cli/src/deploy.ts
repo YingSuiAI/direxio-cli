@@ -46,6 +46,7 @@ export interface DeployResult {
   ok: true;
   service_id: string;
   domain: string;
+  init_password: string;
   state: string;
   report: string;
 }
@@ -357,6 +358,7 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
     ok: true,
     service_id: serviceId,
     domain,
+    init_password: bootstrap.password,
     state: join(serviceDir, "state.json"),
     report
   };
@@ -415,11 +417,12 @@ function loadOrInitializeState(options: DeployOptions, context: ServiceContext, 
   const existing = readServiceState(context);
   const existingMode = normalizeDomainMode(existing.domain_mode || "auto");
   const requestedMode = normalizeDomainMode(options.domainMode ?? existingMode);
+  const effectiveMode = requestedMode === "auto" && existingMode !== "auto" ? existingMode : requestedMode;
   const existingCloud = inferCloudProvider(existing);
   const requestedCloud = normalizeCloudProvider(options.cloud ?? "lightsail");
   const existingInstallMode = normalizeAgentInstallMode(existing.local_install_mode || existing.connect_install_policy || "auto");
   const requestedInstallMode = normalizeAgentInstallMode(options.agentInstallMode ?? existingInstallMode);
-  if (options.domainMode && existingMode !== "auto" && requestedMode !== existingMode) {
+  if (options.domainMode && existingMode !== "auto" && effectiveMode !== existingMode) {
     throw new Error(`state is bound to domain_mode=${existingMode}; refusing requested domain_mode=${requestedMode}`);
   }
   if (options.cloud && existingCloud !== requestedCloud) {
@@ -432,7 +435,7 @@ function loadOrInitializeState(options: DeployOptions, context: ServiceContext, 
     cloud_provider: requestedCloud,
     instance_type: requestedCloud === "ec2" ? existing.instance_type || DEFAULT_EC2_INSTANCE_TYPE : existing.instance_type || "",
     domain,
-    domain_mode: requestedMode,
+    domain_mode: effectiveMode,
     domain_confirmed_irreversible: true,
     phases: {
       ...base.phases,
@@ -1253,10 +1256,13 @@ function renderUserData(state: ServiceState, domain: string): string {
 async function waitForHealthz(options: DeployOptions, context: ServiceContext, state: ServiceState, domain: string): Promise<void> {
   const fetchImpl = options.fetch ?? fetch;
   const attempts = envInteger("DIREXIO_HEALTH_POLL_MAX", 90);
+  const initialIntervalMs = envInteger("DIREXIO_HEALTH_POLL_INITIAL_INTERVAL_MS", 2_000);
   const intervalMs = envInteger("DIREXIO_HEALTH_POLL_INTERVAL_MS", 10_000);
+  const fastAttempts = envInteger("DIREXIO_HEALTH_POLL_FAST_ATTEMPTS", 30);
   let lastError = "";
   const startedAt = Date.now();
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const nextDelayMs = attempt < attempts ? healthPollDelayMs(attempt, { initialIntervalMs, intervalMs, fastAttempts }) : 0;
     const detail = `waiting for https://${domain}/healthz (${attempt}/${attempts})`;
     markPhaseRunning(state, "S4_BOOTSTRAP_STACK", options.now?.() ?? new Date().toISOString(), detail);
     writeServiceState(context, state);
@@ -1264,7 +1270,7 @@ async function waitForHealthz(options: DeployOptions, context: ServiceContext, s
       attempt,
       maxAttempts: attempts,
       elapsedMs: Date.now() - startedAt,
-      nextDelayMs: attempt < attempts ? intervalMs : 0
+      nextDelayMs
     });
     try {
       const response = await fetchImpl(`https://${domain}/healthz`, { method: "GET" });
@@ -1274,7 +1280,7 @@ async function waitForHealthz(options: DeployOptions, context: ServiceContext, s
       lastError = error instanceof Error ? error.message : String(error);
     }
     if (attempt < attempts) {
-      await delay(intervalMs);
+      await delay(nextDelayMs);
     }
   }
   const message = `healthz did not return 200 before timeout: https://${domain}/healthz${lastError ? ` (${lastError})` : ""}. Run direxio status --service ${context.serviceId} --json, check ports 80/443, and inspect the cloud-init or Docker logs on the instance before retrying.`;
@@ -1285,6 +1291,16 @@ async function waitForHealthz(options: DeployOptions, context: ServiceContext, s
     elapsedMs: Date.now() - startedAt
   });
   throw new Error(message);
+}
+
+export function healthPollDelayMs(
+  attempt: number,
+  options: { initialIntervalMs?: number; intervalMs?: number; fastAttempts?: number } = {}
+): number {
+  const initialIntervalMs = options.initialIntervalMs ?? 2_000;
+  const intervalMs = options.intervalMs ?? 10_000;
+  const fastAttempts = options.fastAttempts ?? 30;
+  return attempt <= fastAttempts ? initialIntervalMs : intervalMs;
 }
 
 async function bootstrapRemote(options: DeployOptions, state: ServiceState, domain: string): Promise<BootstrapCredentials> {

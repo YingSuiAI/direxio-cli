@@ -856,6 +856,7 @@ describe("direxio CLI", () => {
   it("routes deploy through the deployment state machine", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-command-"));
     const stdout: string[] = [];
+    const stderr: string[] = [];
 
     const code = await runCli(
       [
@@ -875,7 +876,7 @@ describe("direxio CLI", () => {
       {
         homeDir: home,
         stdout: (line) => stdout.push(line),
-        stderr: () => {},
+        stderr: (line) => stderr.push(line),
         runner: async (command, args) => {
           const awsArgs = command === "aws" && args[0] === "--region" ? args.slice(2) : args;
           if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
@@ -915,8 +916,14 @@ describe("direxio CLI", () => {
     expect(JSON.parse(stdout.join("\n"))).toMatchObject({
       ok: true,
       service_id: "deploy.example.test",
-      domain: "deploy.example.test"
+      domain: "deploy.example.test",
+      init_password: "12345678"
     });
+    expect(stderr).toEqual(expect.arrayContaining([
+      expect.stringContaining("[deploy] S0_PREREQ_AWS running: verifying AWS caller identity"),
+      expect.stringContaining("[deploy] S4_BOOTSTRAP_STACK waiting: waiting for https://deploy.example.test/healthz"),
+      expect.stringContaining("[deploy] S7_VERIFY_E2E done: deployment automation completed")
+    ]));
   });
 
   it("returns exit code 2 when deploy is waiting for user-managed DNS", async () => {

@@ -120,6 +120,6 @@ Use \`--agent-install recommend\` only when the user wants files and commands wi
 
 Run command-specific help when unsure: \`direxio deploy --help\`, \`direxio status --help\`, \`direxio update --help\`, \`direxio reset-app-data --help\`, \`direxio destroy --help\`, \`direxio connect --help\`, and \`direxio mcp --help\`.
 
-Never print Matrix access tokens, agent tokens, initialization codes, AWS secrets, private keys, or full credential files. Use \`direxio status --json\`, \`direxio mcp doctor --json\`, and other redacted reports for machine-readable state.
+Successful deploy output includes \`init_password\`, the one-time app initialization password users enter before setting their own password. Do not print Matrix access tokens, agent tokens, AWS secrets, private keys, or full credential files. Use \`direxio status --json\`, \`direxio mcp doctor --json\`, and other redacted reports for machine-readable state.
 `;
 }

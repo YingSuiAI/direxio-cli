@@ -31,7 +31,8 @@ describe("skill installation", () => {
     expect(skill).toContain("direxio update --service <service-id> --image");
     expect(skill).toContain("restarts the backend image in place");
     expect(skill).toContain("Run command-specific help when unsure");
-    expect(skill).toContain("Never print Matrix access tokens");
+    expect(skill).toContain("Successful deploy output includes `init_password`");
+    expect(skill).toContain("Do not print Matrix access tokens");
   });
 
   it("installs every provider skill at the provider-owned path", async () => {

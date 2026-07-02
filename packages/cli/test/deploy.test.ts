@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { deployService } from "../src/deploy.js";
+import { deployService, healthPollDelayMs } from "../src/deploy.js";
 
 describe("deploy operation", () => {
   it("runs the deployment state machine and writes credentials, connect config, mcp snippets, state, and report", async () => {
@@ -145,10 +145,13 @@ describe("deploy operation", () => {
       expect.stringContaining("Elastic IP"),
       expect.stringContaining("Route53")
     ]));
-    expect(JSON.stringify(JSON.parse(readFileSync(join(serviceDir, "operation-report.json"), "utf8")))).not.toContain("agent-secret");
+    const operationReport = JSON.stringify(JSON.parse(readFileSync(join(serviceDir, "operation-report.json"), "utf8")));
+    expect(operationReport).not.toContain("agent-secret");
+    expect(operationReport).not.toContain("12345678");
     expect(JSON.parse(readFileSync(join(serviceDir, "credentials.json"), "utf8"))).toMatchObject({
       profiles: {
         default: {
+          password: "12345678",
           direxio_domain: "https://deploy.example.test",
           direxio_agent_token: "agent-secret",
           direxio_agent_room_id: "!agents:deploy.example.test"
@@ -769,6 +772,7 @@ describe("deploy operation", () => {
       domain: "resume.example.test",
       region: "us-west-2",
       cloud: "ec2",
+      domainMode: "auto",
       agent: "codex",
       mcpTarget: "codex",
       confirmDomainBinding: true,
@@ -824,12 +828,21 @@ describe("deploy operation", () => {
     );
     expect(JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"))).toMatchObject({
       phase: "S7_VERIFY_E2E",
+      domain_mode: "route53",
       resources: {
         instance_id: "i-existing",
         public_ip: "203.0.113.50",
         route53_zone_id: "ZEXISTING"
       }
     });
+  });
+
+  it("uses a fast early healthz polling interval before falling back to the steady interval", () => {
+    expect(healthPollDelayMs(1)).toBe(2_000);
+    expect(healthPollDelayMs(30)).toBe(2_000);
+    expect(healthPollDelayMs(31)).toBe(10_000);
+    expect(healthPollDelayMs(1, { initialIntervalMs: 500, intervalMs: 4_000, fastAttempts: 3 })).toBe(500);
+    expect(healthPollDelayMs(4, { initialIntervalMs: 500, intervalMs: 4_000, fastAttempts: 3 })).toBe(4_000);
   });
 
   it("persists provisioned resources before a later AWS failure", async () => {
