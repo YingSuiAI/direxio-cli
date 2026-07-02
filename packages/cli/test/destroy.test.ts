@@ -151,6 +151,64 @@ describe("destroy operation", () => {
     });
   });
 
+  it("cleans recorded Lightsail resources when the service was deployed on Lightsail", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-lightsail-"));
+    const serviceDir = join(home, ".direxio", "nodes", "lightsail.example.test");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        domain: "lightsail.example.test",
+        cloud_provider: "lightsail",
+        domain_mode: "user",
+        agent_service_id: "lightsail.example.test",
+        agent_service_dir: serviceDir,
+        resources: {
+          lightsail_instance_name: "direxio-lightsail-example-test",
+          lightsail_static_ip_name: "direxio-ip-lightsail-example-test",
+          public_ip: "203.0.113.124",
+          key_name: "direxio-key-lightsail-example-test"
+        }
+      }),
+      "utf8"
+    );
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await destroyService({
+      serviceId: "lightsail.example.test",
+      serviceDir,
+      credentialsFile: join(serviceDir, "credentials.json")
+    }, {
+      now: () => "2026-07-02T02:03:04.000Z",
+      runner: async (command, args) => {
+        calls.push({ command, args });
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(calls).toEqual(expect.arrayContaining([
+      { command: "aws", args: ["lightsail", "detach-static-ip", "--static-ip-name", "direxio-ip-lightsail-example-test"] },
+      { command: "aws", args: ["lightsail", "release-static-ip", "--static-ip-name", "direxio-ip-lightsail-example-test"] },
+      { command: "aws", args: ["lightsail", "delete-instance", "--instance-name", "direxio-lightsail-example-test"] },
+      { command: "aws", args: ["lightsail", "delete-key-pair", "--key-pair-name", "direxio-key-lightsail-example-test"] }
+    ]));
+    expect(calls.some((call) => call.command === "aws" && call.args[0] === "ec2")).toBe(false);
+    const reportPath = join(home, ".direxio", "reports", "lightsail.example.test", "operation-report.json");
+    expect(JSON.parse(readFileSync(reportPath, "utf8"))).toMatchObject({
+      destroy: {
+        evidence: {
+          lightsail_instance: { status: "deleted" },
+          lightsail_static_ip: { status: "released" },
+          key_pair: { status: "deleted" },
+          route53_a_record: { status: "skipped" }
+        }
+      },
+      billing: {
+        destroy_cleanup_status: "no_recorded_billable_resource_residue"
+      }
+    });
+  });
+
   it("does not touch Route53 for user-managed DNS state", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-user-dns-"));
     const serviceDir = join(home, ".direxio", "nodes", "user-dns.example.test");

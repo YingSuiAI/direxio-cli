@@ -10,7 +10,7 @@ Unified local product surface for deploying Direxio, wiring the Matrix agent bri
 direxio onboard aws
 direxio aws import-csv <aws-access-key.csv> --profile direxio-deployer --region <aws-region>
 direxio aws verify --profile direxio-deployer
-direxio deploy --service <service-id> --domain <domain> --region <aws-region> --dns auto --agent-install auto --confirm-domain
+direxio deploy --service <service-id> --domain <domain> --region <aws-region> --cloud lightsail --dns auto --agent-install auto --confirm-domain
 direxio status --service <service-id>
 direxio update --service <service-id>
 direxio reset-app-data --service <service-id> --confirm
@@ -29,7 +29,7 @@ direxio confirm app-initialization --service <service-id> --evidence "user compl
 direxio skill install --agent codex
 ```
 
-Deploy uses `--dns auto` by default: if the AWS account has a matching public Route53 hosted zone, `direxio` writes the A record there; otherwise it records the required user-managed DNS A record and exits with code `2` until the domain resolves to the Elastic IP. New EC2 deployments use a 50 GiB gp3 root EBS volume by default. `--agent-install auto` is also the default. Use `--agent-install recommend` to write files and print install commands, or `--agent-install skip` to write credentials/config only.
+Deploy uses `--cloud lightsail` by default, selecting the Lightsail $12/month Linux bundle when available. Use `--cloud ec2` only when EC2-specific networking or instance controls are required; new EC2 deployments use a 50 GiB gp3 root EBS volume by default. `--dns auto` is also the default: if the AWS account has a matching public Route53 hosted zone, `direxio` writes the A record there; otherwise it records the required user-managed DNS A record and exits with code `2` until the domain resolves to the fixed public IP. `--agent-install auto` installs and verifies connect/MCP by default; `recommend` writes files and next commands; `skip` writes credentials/config only.
 
 Agent compatibility is implemented through built-in provider plugins. `direxio agents list` shows each provider's skill path, connect type, MCP config files, and required local binaries. `direxio agents check --agent <provider>` and `direxio verify runtime` probe the selected provider's executable dependencies before claiming the runtime is usable. Supported providers are `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
 

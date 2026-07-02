@@ -28,6 +28,17 @@ export async function destroyService(context: ServiceContext, options: DestroyOp
 }
 
 async function destroyAwsResources(state: ServiceState, options: DestroyOptions, ts: string): Promise<void> {
+  const cloudProvider = inferCloudProvider(state);
+  if (cloudProvider === "lightsail") {
+    await destroyLightsailResources(state, options, ts);
+  } else {
+    await destroyEc2Resources(state, options, ts);
+  }
+
+  await destroyDnsResources(state, options, ts);
+}
+
+async function destroyEc2Resources(state: ServiceState, options: DestroyOptions, ts: string): Promise<void> {
   const resources = state.resources ?? {};
   if (resources.instance_id) {
     await runAws(options, ["ec2", "terminate-instances", "--instance-ids", String(resources.instance_id)]);
@@ -64,6 +75,38 @@ async function destroyAwsResources(state: ServiceState, options: DestroyOptions,
   } else {
     recordEvidence(state, "key_pair", "skipped", "no key_name recorded", ts);
   }
+}
+
+async function destroyLightsailResources(state: ServiceState, options: DestroyOptions, ts: string): Promise<void> {
+  const resources = state.resources ?? {};
+  const instanceName = String(resources.lightsail_instance_name || resources.instance_id || "");
+  const staticIpName = String(resources.lightsail_static_ip_name || resources.static_ip_name || "");
+
+  if (staticIpName) {
+    await tryAws(options, ["lightsail", "detach-static-ip", "--static-ip-name", staticIpName]);
+    await runAws(options, ["lightsail", "release-static-ip", "--static-ip-name", staticIpName]);
+    recordEvidence(state, "lightsail_static_ip", "released", staticIpName, ts);
+  } else {
+    recordEvidence(state, "lightsail_static_ip", "skipped", "no lightsail_static_ip_name recorded", ts);
+  }
+
+  if (instanceName) {
+    await runAws(options, ["lightsail", "delete-instance", "--instance-name", instanceName]);
+    recordEvidence(state, "lightsail_instance", "deleted", instanceName, ts);
+  } else {
+    recordEvidence(state, "lightsail_instance", "skipped", "no lightsail_instance_name recorded", ts);
+  }
+
+  if (resources.key_name) {
+    await runAws(options, ["lightsail", "delete-key-pair", "--key-pair-name", String(resources.key_name)]);
+    recordEvidence(state, "key_pair", "deleted", String(resources.key_name), ts);
+  } else {
+    recordEvidence(state, "key_pair", "skipped", "no key_name recorded", ts);
+  }
+}
+
+async function destroyDnsResources(state: ServiceState, options: DestroyOptions, ts: string): Promise<void> {
+  const resources = state.resources ?? {};
 
   if (String(state.domain_mode || "") === "user") {
     recordEvidence(state, "route53_a_record", "skipped", "user-managed DNS is outside automatic destroy scope", ts);
@@ -223,4 +266,24 @@ function pathsEqual(left: string, right: string): boolean {
 function normalizeComparablePath(value: string): string {
   const normalized = normalize(value).replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function inferCloudProvider(state: ServiceState): "lightsail" | "ec2" {
+  const explicit = stringValue(state.cloud_provider || state.deploy_mode || state.cloud);
+  if (explicit === "lightsail" || explicit === "ec2") return explicit;
+  const resources = state.resources && typeof state.resources === "object" ? state.resources : {};
+  if (
+    stringValue(resources.lightsail_instance_name)
+    || stringValue(resources.lightsail_bundle_id)
+    || stringValue(resources.lightsail_static_ip_name)
+    || stringValue(resources.static_ip_name)
+  ) {
+    return "lightsail";
+  }
+  return "ec2";
+}
+
+function stringValue(value: unknown): string {
+  if (value === null || typeof value === "undefined") return "";
+  return String(value).trim().toLowerCase();
 }

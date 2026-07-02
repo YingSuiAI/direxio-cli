@@ -17,6 +17,7 @@ export interface DeployOptions {
   serviceId: string;
   domain: string;
   region: string;
+  cloud?: CloudProvider;
   domainMode?: DomainMode;
   agent?: string;
   agentInstallMode?: AgentInstallMode;
@@ -32,6 +33,7 @@ export interface DeployOptions {
 
 export type DomainMode = "auto" | "user" | "route53";
 export type AgentInstallMode = "auto" | "recommend" | "skip";
+export type CloudProvider = "lightsail" | "ec2";
 
 export interface DnsResolver {
   resolve4(domain: string): Promise<string[]>;
@@ -72,6 +74,11 @@ interface MatrixSession {
 
 const DEFAULT_ROOT_VOLUME_GB = 50;
 const DEFAULT_ROOT_DEVICE_NAME = "/dev/sda1";
+const DEFAULT_EC2_INSTANCE_TYPE = "t3.small";
+const DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD = 12;
+const DEFAULT_LIGHTSAIL_BLUEPRINT_ID = "ubuntu_22_04";
+const DEFAULT_LIGHTSAIL_DISK_GB = 60;
+const DEFAULT_LIGHTSAIL_RAM_GB = 2;
 
 const phases = [
   "S0_PREREQ_AWS",
@@ -95,7 +102,13 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
     throw new Error("deploy requires confirmed domain binding");
   }
   const agentProvider = await resolveAgentProvider(options.agent ?? "codex");
-  const normalizedOptions: DeployOptions = { ...options, region, agent: agentProvider.id };
+  const explicitCloud = options.cloud ?? process.env.DIREXIO_CLOUD_PROVIDER ?? process.env.DIREXIO_DEPLOY_PROVIDER;
+  const normalizedOptions: DeployOptions = {
+    ...options,
+    region,
+    ...(explicitCloud ? { cloud: normalizeCloudProvider(explicitCloud) } : {}),
+    agent: agentProvider.id
+  };
 
   const serviceDir = join(options.homeDir ?? homedir(), ".direxio", "nodes", serviceId);
   const context: ServiceContext = {
@@ -109,7 +122,8 @@ export async function deployService(options: DeployOptions): Promise<DeployResul
 
   await runAws(normalizedOptions, ["sts", "get-caller-identity"]);
   markPhaseDone(state, "S0_PREREQ_AWS", ts, "AWS caller identity verified");
-  markPhaseDone(state, "S1_PREFLIGHT", ts, "deployment inputs validated");
+  await recordCloudRecommendation(normalizedOptions, context, state, ts);
+  markPhaseDone(state, "S1_PREFLIGHT", ts, `deployment inputs validated; selected_cloud=${state.cloud_provider}`);
   markPhaseDone(state, "S2_DOMAIN", ts, "production domain binding confirmed");
   writeServiceState(context, state);
 
@@ -162,17 +176,20 @@ function initialState(options: DeployOptions, context: ServiceContext, domain: s
   const phaseState: Record<string, { status: string }> = {};
   for (const phase of phases) phaseState[phase] = { status: "pending" };
   const agent = options.agent ?? "codex";
+  const cloudProvider = normalizeCloudProvider(options.cloud ?? "lightsail");
   const domainMode = normalizeDomainMode(options.domainMode ?? "auto");
   const agentInstallMode = normalizeAgentInstallMode(options.agentInstallMode ?? "auto");
   return {
     run_id: `direxio-${Date.now()}`,
     region: options.region,
+    cloud_provider: cloudProvider,
+    instance_type: cloudProvider === "ec2" ? DEFAULT_EC2_INSTANCE_TYPE : "",
     domain_mode: domainMode,
     domain,
     domain_confirmed_irreversible: true,
     billing_warnings: [
-      "EC2, EBS, public IPv4, Elastic IP, and Route53 hosted zones may keep billing until destroy completes.",
-      "Elastic IP and public IPv4 charges may continue while allocated or attached.",
+      "Lightsail instances, static IPs, EC2, EBS, public IPv4, Elastic IP, and Route53 hosted zones may keep billing until destroy completes.",
+      "Lightsail static IP, Elastic IP, and public IPv4 charges may continue while allocated or attached.",
       "Route53 hosted zones are billable until deleted; user-owned parent zones and domain registrations are not destroyed by direxio."
     ],
     phase: "S0_PREREQ_AWS",
@@ -207,15 +224,22 @@ function loadOrInitializeState(options: DeployOptions, context: ServiceContext, 
   const existing = readServiceState(context);
   const existingMode = normalizeDomainMode(existing.domain_mode || "auto");
   const requestedMode = normalizeDomainMode(options.domainMode ?? existingMode);
+  const existingCloud = inferCloudProvider(existing);
+  const requestedCloud = normalizeCloudProvider(options.cloud ?? existingCloud);
   const existingInstallMode = normalizeAgentInstallMode(existing.local_install_mode || existing.connect_install_policy || "auto");
   const requestedInstallMode = normalizeAgentInstallMode(options.agentInstallMode ?? existingInstallMode);
   if (options.domainMode && existingMode !== "auto" && requestedMode !== existingMode) {
     throw new Error(`state is bound to domain_mode=${existingMode}; refusing requested domain_mode=${requestedMode}`);
   }
+  if (options.cloud && existingCloud !== requestedCloud) {
+    throw new Error(`state is bound to cloud_provider=${existingCloud}; refusing requested cloud_provider=${requestedCloud}`);
+  }
   return {
     ...base,
     ...existing,
     region: options.region,
+    cloud_provider: requestedCloud,
+    instance_type: requestedCloud === "ec2" ? existing.instance_type || DEFAULT_EC2_INSTANCE_TYPE : existing.instance_type || "",
     domain,
     domain_mode: requestedMode,
     domain_confirmed_irreversible: true,
@@ -243,6 +267,16 @@ function loadOrInitializeState(options: DeployOptions, context: ServiceContext, 
 }
 
 async function provisionAwsResources(options: DeployOptions, context: ServiceContext, state: ServiceState, domain: string): Promise<void> {
+  const provider = normalizeCloudProvider(state.cloud_provider || options.cloud || "lightsail");
+  state.cloud_provider = provider;
+  if (provider === "lightsail") {
+    await provisionLightsailResources(options, context, state, domain);
+    return;
+  }
+  await provisionEc2Resources(options, context, state, domain);
+}
+
+async function provisionEc2Resources(options: DeployOptions, context: ServiceContext, state: ServiceState, domain: string): Promise<void> {
   if (!state.resources || typeof state.resources !== "object") state.resources = {};
   const ami = stringValue(state.resources.ami_id) || await lookupUbuntuAmi(options);
   state.resources.ami_id = ami;
@@ -268,6 +302,7 @@ async function provisionAwsResources(options: DeployOptions, context: ServiceCon
     writeServiceState(context, state);
   }
   if (!stringValue(state.resources.instance_id)) {
+    state.instance_type = state.instance_type || DEFAULT_EC2_INSTANCE_TYPE;
     state.resources.root_volume_gb = DEFAULT_ROOT_VOLUME_GB;
     writeServiceState(context, state);
     const instance = parseJsonObject((await runAws(options, [
@@ -276,7 +311,7 @@ async function provisionAwsResources(options: DeployOptions, context: ServiceCon
       "--image-id",
       ami,
       "--instance-type",
-      "t3.small",
+      String(state.instance_type),
       "--key-name",
       String(state.resources.key_name),
       "--security-group-ids",
@@ -303,6 +338,332 @@ async function provisionAwsResources(options: DeployOptions, context: ServiceCon
   }
 
   await configureDns(options, context, state, domain);
+}
+
+async function provisionLightsailResources(options: DeployOptions, context: ServiceContext, state: ServiceState, domain: string): Promise<void> {
+  if (!state.resources || typeof state.resources !== "object") state.resources = {};
+  const bundle = await resolveLightsailBundle(options, context, state);
+  state.resources.lightsail_blueprint_id = stringValue(state.resources.lightsail_blueprint_id) || process.env.DIREXIO_LIGHTSAIL_BLUEPRINT_ID || DEFAULT_LIGHTSAIL_BLUEPRINT_ID;
+  state.resources.lightsail_availability_zone = stringValue(state.resources.lightsail_availability_zone) || await resolveLightsailAvailabilityZone(options);
+  state.resources.lightsail_instance_name = stringValue(state.resources.lightsail_instance_name) || awsResourceName("direxio", domain);
+  state.resources.lightsail_static_ip_name = stringValue(state.resources.lightsail_static_ip_name) || awsResourceName("direxio-ip", domain);
+  writeServiceState(context, state);
+
+  if (!stringValue(state.resources.key_name) || !stringValue(state.resources.key_file)) {
+    const keyName = awsResourceName("direxio-key", domain);
+    const key = parseJsonObject((await runAws(options, ["lightsail", "create-key-pair", "--key-pair-name", keyName])).stdout);
+    state.resources.key_name = stringValue(key.name) || keyName;
+    state.resources.key_file = join(state.agent_service_dir, `${state.resources.key_name}.pem`);
+    const keyMaterial = lightsailPrivateKeyMaterial(key);
+    if (keyMaterial) {
+      writeFileSync(String(state.resources.key_file), keyMaterial, { encoding: "utf8", mode: 0o600 });
+      restrictPrivateFile(String(state.resources.key_file));
+    }
+    writeServiceState(context, state);
+  }
+
+  if (!stringValue(state.resources.user_data) || !stringValue(state.resources.instance_id)) {
+    state.resources.user_data = renderUserData(state, domain);
+    writeServiceState(context, state);
+  }
+
+  if (!stringValue(state.resources.instance_id)) {
+    await runAws(options, [
+      "lightsail",
+      "create-instances",
+      "--instance-names",
+      String(state.resources.lightsail_instance_name),
+      "--availability-zone",
+      String(state.resources.lightsail_availability_zone),
+      "--blueprint-id",
+      String(state.resources.lightsail_blueprint_id),
+      "--bundle-id",
+      bundle.bundleId,
+      "--key-pair-name",
+      String(state.resources.key_name),
+      "--user-data",
+      `file://${state.resources.user_data}`
+    ]);
+    state.resources.instance_id = String(state.resources.lightsail_instance_name);
+    state.resources.lightsail_instance_created = "true";
+    writeServiceState(context, state);
+  }
+  if (String(state.resources.lightsail_ports_configured || "") !== "true") {
+    await openLightsailPorts(options, String(state.resources.lightsail_instance_name));
+    state.resources.lightsail_ports_configured = "true";
+    writeServiceState(context, state);
+  }
+
+  if (!stringValue(state.resources.public_ip)) {
+    if (!await lightsailStaticIpExists(options, String(state.resources.lightsail_static_ip_name))) {
+      await runAws(options, ["lightsail", "allocate-static-ip", "--static-ip-name", String(state.resources.lightsail_static_ip_name)]);
+      writeServiceState(context, state);
+    }
+    await runAws(options, [
+      "lightsail",
+      "attach-static-ip",
+      "--static-ip-name",
+      String(state.resources.lightsail_static_ip_name),
+      "--instance-name",
+      String(state.resources.lightsail_instance_name)
+    ]);
+    const staticIp = parseJsonObject((await runAws(options, ["lightsail", "get-static-ip", "--static-ip-name", String(state.resources.lightsail_static_ip_name)])).stdout);
+    state.resources.public_ip = stringValue(staticIp.staticIp?.ipAddress || staticIp.ipAddress);
+    if (!state.resources.public_ip) {
+      throw new Error(`Lightsail static IP ${state.resources.lightsail_static_ip_name} did not return an ipAddress`);
+    }
+    state.resources.static_ip_name = state.resources.lightsail_static_ip_name;
+    writeServiceState(context, state);
+  }
+
+  await configureDns(options, context, state, domain);
+}
+
+interface LightsailBundleSelection {
+  bundleId: string;
+  monthlyPriceUsd: number;
+  ramGb: number;
+  diskGb: number;
+  transferGb: number;
+  cpuCount: number;
+}
+
+async function recordCloudRecommendation(options: DeployOptions, context: ServiceContext, state: ServiceState, ts: string): Promise<void> {
+  const freeTier = await queryFreeTierUsage(options, ts);
+  const lightsailAvailability = freeTierAvailability(freeTier, "lightsail");
+  const ec2Availability = freeTierAvailability(freeTier, "ec2");
+  const recommended = lightsailAvailability === "exhausted" && ec2Availability === "remaining" ? "ec2" : "lightsail";
+  state.aws_free_tier = freeTier;
+  state.cloud_recommendation = {
+    checked_at: ts,
+    default_provider: "lightsail",
+    selected_provider: normalizeCloudProvider(state.cloud_provider || options.cloud || "lightsail"),
+    recommended_provider: recommended,
+    choices: ["lightsail", "ec2"],
+    lightsail: {
+      monthly_usd: DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD,
+      ram_gb: DEFAULT_LIGHTSAIL_RAM_GB,
+      disk_gb: DEFAULT_LIGHTSAIL_DISK_GB,
+      note: "Default production bundle; select EC2 with --cloud ec2 or DIREXIO_CLOUD_PROVIDER=ec2."
+    },
+    ec2: {
+      instance_type: DEFAULT_EC2_INSTANCE_TYPE,
+      root_volume_gb: DEFAULT_ROOT_VOLUME_GB,
+      note: "Retained for operators who need EC2-specific networking, quotas, or instance controls."
+    },
+    free_tier: {
+      status: freeTier.status,
+      lightsail: lightsailAvailability,
+      ec2: ec2Availability
+    }
+  };
+  writeServiceState(context, state);
+}
+
+async function queryFreeTierUsage(options: DeployOptions, ts: string): Promise<Record<string, any>> {
+  const result = await tryAws(options, ["freetier", "get-free-tier-usage", "--output", "json"]);
+  if (result.exitCode !== 0) {
+    return {
+      status: "unavailable",
+      checked_at: ts,
+      error: firstLine(result.stderr || result.stdout || `aws exited with ${result.exitCode}`)
+    };
+  }
+  const parsed = parseJsonObject(result.stdout);
+  const usages = Array.isArray(parsed.freeTierUsages)
+    ? parsed.freeTierUsages
+    : Array.isArray(parsed.FreeTierUsages)
+      ? parsed.FreeTierUsages
+      : [];
+  return {
+    status: "queried",
+    checked_at: ts,
+    usage_count: usages.length,
+    usages: usages.map(redactFreeTierUsage)
+  };
+}
+
+function redactFreeTierUsage(value: unknown): Record<string, any> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const usage = value as Record<string, any>;
+  return {
+    service: stringValue(usage.service || usage.Service),
+    operation: stringValue(usage.operation || usage.Operation),
+    usage_type: stringValue(usage.usageType || usage.UsageType),
+    region: stringValue(usage.region || usage.Region),
+    actual_usage_amount: usage.actualUsageAmount ?? usage.ActualUsageAmount ?? null,
+    forecasted_usage_amount: usage.forecastedUsageAmount ?? usage.ForecastedUsageAmount ?? null,
+    limit: usage.limit ?? usage.Limit ?? null,
+    unit: stringValue(usage.unit || usage.Unit),
+    description: stringValue(usage.description || usage.Description)
+  };
+}
+
+function freeTierAvailability(freeTier: Record<string, any>, provider: "lightsail" | "ec2"): "remaining" | "exhausted" | "unknown" {
+  if (freeTier.status !== "queried" || !Array.isArray(freeTier.usages)) return "unknown";
+  const matches = freeTier.usages.filter((usage: Record<string, any>) => {
+    const text = [
+      usage.service,
+      usage.operation,
+      usage.usage_type,
+      usage.description
+    ].map(stringValue).join(" ").toLowerCase();
+    return provider === "lightsail" ? text.includes("lightsail") : text.includes("ec2") || text.includes("elastic compute");
+  });
+  if (matches.length === 0) return "unknown";
+  return matches.some((usage: Record<string, any>) => usageRemaining(usage)) ? "remaining" : "exhausted";
+}
+
+function usageRemaining(usage: Record<string, any>): boolean {
+  const limit = numberValue(usage.limit);
+  const actual = numberValue(usage.actual_usage_amount);
+  if (!Number.isFinite(limit) || limit <= 0 || !Number.isFinite(actual)) return false;
+  return actual < limit;
+}
+
+async function resolveLightsailBundle(options: DeployOptions, context: ServiceContext, state: ServiceState): Promise<LightsailBundleSelection> {
+  const recorded = stringValue(state.resources.lightsail_bundle_id);
+  if (recorded) {
+    return {
+      bundleId: recorded,
+      monthlyPriceUsd: numberValue(state.resources.lightsail_bundle_price_usd),
+      ramGb: numberValue(state.resources.lightsail_bundle_ram_gb),
+      diskGb: numberValue(state.resources.lightsail_bundle_disk_gb),
+      transferGb: numberValue(state.resources.lightsail_bundle_transfer_gb),
+      cpuCount: numberValue(state.resources.lightsail_bundle_cpu_count)
+    };
+  }
+
+  const requestedBundle = process.env.DIREXIO_LIGHTSAIL_BUNDLE_ID;
+  if (requestedBundle) {
+    const selected = {
+      bundleId: requestedBundle,
+      monthlyPriceUsd: DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD,
+      ramGb: DEFAULT_LIGHTSAIL_RAM_GB,
+      diskGb: DEFAULT_LIGHTSAIL_DISK_GB,
+      transferGb: 0,
+      cpuCount: 0
+    };
+    recordLightsailBundle(state, selected);
+    writeServiceState(context, state);
+    return selected;
+  }
+
+  const bundles = parseJsonObject((await runAws(options, ["lightsail", "get-bundles"])).stdout);
+  const selected = selectLightsailBundle(Array.isArray(bundles.bundles) ? bundles.bundles : []);
+  recordLightsailBundle(state, selected);
+  writeServiceState(context, state);
+  return selected;
+}
+
+function selectLightsailBundle(rawBundles: any[]): LightsailBundleSelection {
+  const candidates = rawBundles
+    .filter((bundle) => {
+      const platform = stringValue(bundle.supportedPlatforms || bundle.supportedPlatform || bundle.platform).toLowerCase();
+      return !platform || platform.includes("linux") || platform.includes("unix");
+    })
+    .map((bundle) => ({
+      bundleId: stringValue(bundle.bundleId),
+      monthlyPriceUsd: numberValue(bundle.price),
+      ramGb: numberValue(bundle.ramSizeInGb),
+      diskGb: numberValue(bundle.diskSizeInGb),
+      transferGb: numberValue(bundle.transferPerMonthInGb),
+      cpuCount: numberValue(bundle.cpuCount)
+    }))
+    .filter((bundle) => bundle.bundleId.length > 0 && bundle.monthlyPriceUsd > 0);
+
+  const exact = candidates
+    .filter((bundle) =>
+      approxEqual(bundle.monthlyPriceUsd, DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD)
+      && bundle.ramGb >= DEFAULT_LIGHTSAIL_RAM_GB
+      && bundle.diskGb >= DEFAULT_LIGHTSAIL_DISK_GB
+    )
+    .sort((a, b) => a.monthlyPriceUsd - b.monthlyPriceUsd || a.ramGb - b.ramGb || a.diskGb - b.diskGb)[0];
+  if (exact) return exact;
+
+  const fallback = candidates
+    .filter((bundle) => bundle.monthlyPriceUsd >= DEFAULT_LIGHTSAIL_BUNDLE_MONTHLY_USD && bundle.ramGb >= DEFAULT_LIGHTSAIL_RAM_GB)
+    .sort((a, b) => a.monthlyPriceUsd - b.monthlyPriceUsd || a.ramGb - b.ramGb || a.diskGb - b.diskGb)[0];
+  if (fallback) return fallback;
+
+  throw new Error("could not find a Lightsail Linux/Unix bundle near $12/month; set DIREXIO_LIGHTSAIL_BUNDLE_ID to override");
+}
+
+function recordLightsailBundle(state: ServiceState, bundle: LightsailBundleSelection): void {
+  state.resources.lightsail_bundle_id = bundle.bundleId;
+  state.resources.lightsail_bundle_price_usd = bundle.monthlyPriceUsd;
+  state.resources.lightsail_bundle_ram_gb = bundle.ramGb;
+  state.resources.lightsail_bundle_disk_gb = bundle.diskGb;
+  state.resources.lightsail_bundle_transfer_gb = bundle.transferGb;
+  state.resources.lightsail_bundle_cpu_count = bundle.cpuCount;
+  state.cost_estimate = {
+    provider: "lightsail",
+    status: "bundle_price_recorded",
+    total_monthly_usd: bundle.monthlyPriceUsd,
+    components: {
+      lightsail_bundle: {
+        bundle_id: bundle.bundleId,
+        monthly_usd: bundle.monthlyPriceUsd,
+        ram_gb: bundle.ramGb,
+        disk_gb: bundle.diskGb,
+        transfer_gb: bundle.transferGb,
+        cpu_count: bundle.cpuCount
+      },
+      route53_hosted_zone: {
+        monthly_usd: state.domain_mode === "route53" ? 0.5 : 0,
+        included: state.domain_mode === "route53"
+      }
+    }
+  };
+}
+
+async function resolveLightsailAvailabilityZone(options: DeployOptions): Promise<string> {
+  const override = process.env.DIREXIO_LIGHTSAIL_AVAILABILITY_ZONE;
+  if (override) return override;
+  const regions = await tryAws(options, ["lightsail", "get-regions", "--include-availability-zones"]);
+  if (regions.exitCode === 0) {
+    try {
+      const parsed = parseJsonObject(regions.stdout);
+      const region = (Array.isArray(parsed.regions) ? parsed.regions : []).find((item: any) => stringValue(item.name) === options.region);
+      const zone = (Array.isArray(region?.availabilityZones) ? region.availabilityZones : [])
+        .find((item: any) => stringValue(item.state).toLowerCase() !== "unavailable");
+      if (zone?.zoneName) return String(zone.zoneName);
+    } catch {
+      return `${options.region}a`;
+    }
+  }
+  return `${options.region}a`;
+}
+
+async function openLightsailPorts(options: DeployOptions, instanceName: string): Promise<void> {
+  for (const rule of [
+    { protocol: "tcp", fromPort: "22", toPort: "22" },
+    { protocol: "tcp", fromPort: "80", toPort: "80" },
+    { protocol: "tcp", fromPort: "443", toPort: "443" },
+    { protocol: "tcp", fromPort: "3478", toPort: "3478" },
+    { protocol: "udp", fromPort: "3478", toPort: "3478" },
+    { protocol: "udp", fromPort: "49160", toPort: "49200" }
+  ]) {
+    await runAws(options, [
+      "lightsail",
+      "open-instance-public-ports",
+      "--instance-name",
+      instanceName,
+      "--port-info",
+      `fromPort=${rule.fromPort},toPort=${rule.toPort},protocol=${rule.protocol}`
+    ]);
+  }
+}
+
+async function lightsailStaticIpExists(options: DeployOptions, staticIpName: string): Promise<boolean> {
+  const result = await tryAws(options, ["lightsail", "get-static-ip", "--static-ip-name", staticIpName]);
+  return result.exitCode === 0;
+}
+
+function lightsailPrivateKeyMaterial(key: Record<string, any>): string {
+  const raw = stringValue(key.privateKeyBase64 || key.PrivateKeyBase64);
+  if (raw) return Buffer.from(raw, "base64").toString("utf8");
+  return stringValue(key.privateKey || key.PrivateKey || key.KeyMaterial);
 }
 
 function rootBlockDeviceMappingsJson(): string {
@@ -727,6 +1088,11 @@ async function runAws(options: DeployOptions, args: string[]): Promise<CommandRe
   return runCommand(options, "aws", ["--region", options.region.trim(), ...args]);
 }
 
+async function tryAws(options: DeployOptions, args: string[]): Promise<CommandResult> {
+  const runner = options.runner ?? defaultRunner;
+  return runner("aws", ["--region", options.region.trim(), ...args]);
+}
+
 async function runCommand(options: DeployOptions, command: string, args: string[]): Promise<CommandResult> {
   const runner = options.runner ?? defaultRunner;
   const result = await runner(command, args);
@@ -818,6 +1184,28 @@ function stringValue(value: unknown): string {
   return String(value);
 }
 
+function numberValue(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function approxEqual(left: number, right: number): boolean {
+  return Math.abs(left - right) < 0.01;
+}
+
+function firstLine(value: string): string {
+  return value.trim().split(/\r?\n/)[0] ?? "";
+}
+
+function awsResourceName(prefix: string, value: string): string {
+  const suffix = value
+    .replace(/^https?:\/\//, "")
+    .replace(/[^a-zA-Z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return `${prefix}-${suffix}`.slice(0, 255);
+}
+
 function restrictPrivateFile(file: string): void {
   chmodSync(file, 0o600);
   if (process.platform !== "win32") return;
@@ -844,6 +1232,36 @@ function normalizeAgentInstallMode(value: unknown): AgentInstallMode {
   const normalized = String(value || "auto").trim().toLowerCase();
   if (normalized === "auto" || normalized === "recommend" || normalized === "skip") return normalized;
   throw new Error(`unknown agent_install_mode=${normalized}; expected auto, recommend, or skip`);
+}
+
+function normalizeCloudProvider(value: unknown): CloudProvider {
+  const normalized = String(value || "lightsail").trim().toLowerCase();
+  if (normalized === "lightsail" || normalized === "ec2") return normalized;
+  throw new Error(`unknown cloud_provider=${normalized}; expected lightsail or ec2`);
+}
+
+function inferCloudProvider(state: ServiceState): CloudProvider {
+  const explicit = stringValue(state.cloud_provider || state.deploy_mode || state.cloud);
+  if (explicit) return normalizeCloudProvider(explicit);
+  const resources = state.resources && typeof state.resources === "object" ? state.resources : {};
+  if (
+    stringValue(resources.lightsail_instance_name)
+    || stringValue(resources.lightsail_bundle_id)
+    || stringValue(resources.lightsail_static_ip_name)
+    || stringValue(resources.static_ip_name)
+  ) {
+    return "lightsail";
+  }
+  if (
+    stringValue(resources.instance_id)
+    || stringValue(resources.eip_id)
+    || stringValue(resources.sg_id)
+    || stringValue(resources.ami_id)
+    || stringValue(resources.root_volume_id)
+  ) {
+    return "ec2";
+  }
+  return "lightsail";
 }
 
 function stripHostedZoneId(value: string): string {

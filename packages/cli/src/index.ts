@@ -4,7 +4,7 @@ import { checkAgentProvider } from "./agents/check.js";
 import { listAgentProviderSummaries } from "./agents/registry.js";
 import { importAwsCsvCredentials, onboardAws, verifyAwsProfile } from "./aws-credentials.js";
 import { connectInstall, connectLogs, connectRestart, connectStatus, type CommandRunner } from "./connect.js";
-import { deployService, type AgentInstallMode, type DnsResolver, type DomainMode } from "./deploy.js";
+import { deployService, type AgentInstallMode, type CloudProvider, type DnsResolver, type DomainMode } from "./deploy.js";
 import { destroyService } from "./destroy.js";
 import { installMcpTarget } from "./mcp-config.js";
 import {
@@ -102,6 +102,7 @@ export async function runCli(argv: string[] = process.argv.slice(2), runtime: Cl
           serviceId: optionValue(rest, "--service") ?? optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
           domain: optionValue(rest, "--domain") ?? process.env.DOMAIN ?? "",
           region: optionValue(rest, "--region") ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "",
+          cloud: cloudProviderValue(rest),
           domainMode: domainModeValue(rest),
           agent: optionValue(rest, "--agent") ?? process.env.DIREXIO_CONNECT_AGENT ?? "codex",
           agentInstallMode: agentInstallModeValue(rest),
@@ -299,7 +300,7 @@ function optionValue(argv: string[], name: string): string | undefined {
 }
 
 function positionalValue(argv: string[]): string | undefined {
-  const optionsWithValues = new Set(["--profile", "--region", "--service", "--domain", "--dns", "--domain-mode", "--agent", "--agent-install", "--local-install", "--mcp-target", "--target", "--workspace", "--evidence", "--image", "--lines", "-n"]);
+  const optionsWithValues = new Set(["--profile", "--region", "--service", "--domain", "--cloud", "--dns", "--domain-mode", "--agent", "--agent-install", "--local-install", "--mcp-target", "--target", "--workspace", "--evidence", "--image", "--lines", "-n"]);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value.startsWith("--") || value === "-n") {
@@ -327,9 +328,17 @@ function agentInstallModeValue(argv: string[]): AgentInstallMode | undefined {
   throw new Error(`unknown agent install mode: ${value}`);
 }
 
+function cloudProviderValue(argv: string[]): CloudProvider | undefined {
+  const value = optionValue(argv, "--cloud") ?? process.env.DIREXIO_CLOUD_PROVIDER ?? process.env.DIREXIO_DEPLOY_PROVIDER;
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "lightsail" || normalized === "ec2") return normalized;
+  throw new Error(`unknown cloud provider: ${value}`);
+}
+
 function usage(): string {
   return `Usage:
-  direxio deploy [--dns auto|user|route53] [--agent-install auto|recommend|skip]
+  direxio deploy [--cloud lightsail|ec2] [--dns auto|user|route53] [--agent-install auto|recommend|skip]
   direxio status|destroy|update|reset-app-data
   direxio onboard aws
   direxio aws <import-csv|verify>

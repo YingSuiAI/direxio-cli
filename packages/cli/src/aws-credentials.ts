@@ -60,7 +60,7 @@ export function onboardAws(): any {
     billing: [
       "Check AWS Billing Console credits and Free Tier state before deploy.",
       "Set an AWS Budget or billing alert before leaving the node running.",
-      "EC2, EBS, public IPv4, Elastic IP, and Route53 hosted zones can bill until destroy completes."
+      "Lightsail instances/static IPs, EC2, EBS, public IPv4, Elastic IP, and Route53 hosted zones can bill until destroy completes."
     ]
   };
 }

@@ -17,6 +17,7 @@ describe("deploy operation", () => {
         serviceId: "deploy.example.test",
         domain: "deploy.example.test",
         region: "ap-northeast-1",
+        cloud: "ec2",
         agent: "codex",
         mcpTarget: "codex",
         workspace: join(home, "workspace"),
@@ -235,6 +236,151 @@ describe("deploy operation", () => {
     expect(state.runtime_checks.summary).toMatchObject({ status: "passed" });
   });
 
+  it("defaults new deployments to the Lightsail $12 bundle while keeping the same deploy contract", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-lightsail-"));
+    const serviceDir = join(home, ".direxio", "nodes", "lightsail.example.test");
+    const calls: Array<{ command: string; args: string[] }> = [];
+    let getStaticIpCalls = 0;
+
+    await deployService({
+      homeDir: home,
+      serviceId: "lightsail.example.test",
+      domain: "lightsail.example.test",
+      region: "us-east-1",
+      domainMode: "user",
+      agentInstallMode: "skip",
+      confirmDomainBinding: true,
+      now: () => "2026-07-02T02:03:04.000Z",
+      runner: async (command, args) => {
+        calls.push({ command, args });
+        const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
+        if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
+        if (command === "aws" && awsArgs[0] === "freetier") {
+          return {
+            stdout: JSON.stringify({
+              freeTierUsages: [
+                {
+                  service: "Amazon Lightsail",
+                  actualUsageAmount: 120,
+                  limit: 750,
+                  unit: "Hrs"
+                }
+              ]
+            }),
+            stderr: "",
+            exitCode: 0
+          };
+        }
+        if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-bundles") {
+          return {
+            stdout: JSON.stringify({
+              bundles: [
+                {
+                  bundleId: "medium_3_0",
+                  price: 12,
+                  ramSizeInGb: 2,
+                  diskSizeInGb: 60,
+                  transferPerMonthInGb: 3072,
+                  cpuCount: 2,
+                  supportedPlatforms: ["LINUX_UNIX"]
+                }
+              ]
+            }),
+            stderr: "",
+            exitCode: 0
+          };
+        }
+        if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-regions") {
+          return {
+            stdout: JSON.stringify({
+              regions: [
+                {
+                  name: "us-east-1",
+                  availabilityZones: [{ zoneName: "us-east-1a", state: "available" }]
+                }
+              ]
+            }),
+            stderr: "",
+            exitCode: 0
+          };
+        }
+        if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "create-key-pair") {
+          return { stdout: JSON.stringify({ name: "direxio-key-lightsail-example-test", privateKeyBase64: Buffer.from("PRIVATE_KEY").toString("base64") }), stderr: "", exitCode: 0 };
+        }
+        if (command === "aws" && awsArgs[0] === "lightsail" && awsArgs[1] === "get-static-ip") {
+          getStaticIpCalls += 1;
+          if (getStaticIpCalls === 1) return { stdout: "", stderr: "NotFoundException", exitCode: 255 };
+          return { stdout: JSON.stringify({ staticIp: { ipAddress: "203.0.113.124" } }), stderr: "", exitCode: 0 };
+        }
+        if (command === "aws" && awsArgs[0] === "lightsail") return { stdout: "{}", stderr: "", exitCode: 0 };
+        if (command === "ssh") {
+          return {
+            stdout: JSON.stringify({
+              password: "12345678",
+              access_token: "owner-secret",
+              agent_token: "agent-secret",
+              agent_room_id: "!agents:lightsail.example.test"
+            }),
+            stderr: "",
+            exitCode: 0
+          };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      fetch: async (input) => {
+        if (String(input) === "https://lightsail.example.test/healthz") {
+          return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+        }
+        return new Response(JSON.stringify({
+          access_token: "matrix-agent-token",
+          device_id: "DEVLIGHTSAIL",
+          user_id: "@agent:lightsail.example.test",
+          homeserver: "https://lightsail.example.test"
+        }), { status: 200 });
+      },
+      dnsResolver: {
+        resolve4: async () => ["203.0.113.124"]
+      }
+    });
+
+    const state = JSON.parse(readFileSync(join(serviceDir, "state.json"), "utf8"));
+    expect(state).toMatchObject({
+      cloud_provider: "lightsail",
+      domain_mode: "user",
+      aws_free_tier: {
+        status: "queried"
+      },
+      cloud_recommendation: {
+        default_provider: "lightsail",
+        selected_provider: "lightsail",
+        recommended_provider: "lightsail"
+      },
+      resources: {
+        instance_id: "direxio-lightsail-example-test",
+        lightsail_instance_name: "direxio-lightsail-example-test",
+        lightsail_static_ip_name: "direxio-ip-lightsail-example-test",
+        lightsail_ports_configured: "true",
+        lightsail_bundle_id: "medium_3_0",
+        lightsail_bundle_price_usd: 12,
+        lightsail_bundle_ram_gb: 2,
+        lightsail_bundle_disk_gb: 60,
+        public_ip: "203.0.113.124",
+        user_dns_a_record: "lightsail.example.test A 203.0.113.124"
+      }
+    });
+    expect(state.cost_estimate).toMatchObject({
+      provider: "lightsail",
+      total_monthly_usd: 12
+    });
+    expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "lightsail" && normalizedAwsArgs(call.args)[1] === "create-instances")).toBe(true);
+    expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "ec2" && normalizedAwsArgs(call.args)[1] === "run-instances")).toBe(false);
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ command: "aws", args: expect.arrayContaining(["open-instance-public-ports", "--port-info", "fromPort=49160,toPort=49200,protocol=udp"]) }),
+      expect.objectContaining({ command: "aws", args: expect.arrayContaining(["allocate-static-ip", "--static-ip-name", "direxio-ip-lightsail-example-test"]) }),
+      expect.objectContaining({ command: "aws", args: expect.arrayContaining(["attach-static-ip", "--static-ip-name", "direxio-ip-lightsail-example-test"]) })
+    ]));
+  });
+
   it("resumes from recorded AWS resources without creating duplicates", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-deploy-resume-"));
     const serviceDir = join(home, ".direxio", "nodes", "resume.example.test");
@@ -342,9 +488,10 @@ describe("deploy operation", () => {
       deployService({
         homeDir: home,
         serviceId: "partial.example.test",
-        domain: "partial.example.test",
-        region: "us-east-1",
-        confirmDomainBinding: true,
+      domain: "partial.example.test",
+      region: "us-east-1",
+      cloud: "ec2",
+      confirmDomainBinding: true,
         runner: async (command, args) => {
           const awsArgs = command === "aws" ? normalizedAwsArgs(args) : args;
           if (command === "aws" && awsArgs[0] === "sts") return { stdout: "{}", stderr: "", exitCode: 0 };
@@ -382,6 +529,7 @@ describe("deploy operation", () => {
         serviceId: "manual-dns.example.test",
         domain: "manual-dns.example.test",
         region: "us-east-1",
+        cloud: "ec2",
         confirmDomainBinding: true,
         runner: async (command, args) => {
           calls.push({ command, args });
@@ -443,6 +591,7 @@ describe("deploy operation", () => {
         serviceId: "overwrite.example.test",
         domain: "overwrite.example.test",
         region: "us-east-1",
+        cloud: "ec2",
         domainMode: "route53",
         confirmDomainBinding: true,
         runner: async (command, args) => {
@@ -492,6 +641,7 @@ describe("deploy operation", () => {
       serviceId: "confirmed-overwrite.example.test",
       domain: "confirmed-overwrite.example.test",
       region: "us-east-1",
+      cloud: "ec2",
       domainMode: "route53",
       confirmDomainBinding: true,
       confirmDnsOverwrite: true,
