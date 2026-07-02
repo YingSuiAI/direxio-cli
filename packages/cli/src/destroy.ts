@@ -84,22 +84,40 @@ async function destroyLightsailResources(state: ServiceState, options: DestroyOp
 
   if (staticIpName) {
     await tryAws(options, ["lightsail", "detach-static-ip", "--static-ip-name", staticIpName]);
-    await runAws(options, ["lightsail", "release-static-ip", "--static-ip-name", staticIpName]);
-    recordEvidence(state, "lightsail_static_ip", "released", staticIpName, ts);
+    const result = await tryAws(options, ["lightsail", "release-static-ip", "--static-ip-name", staticIpName]);
+    if (result.exitCode === 0) {
+      recordEvidence(state, "lightsail_static_ip", "released", staticIpName, ts);
+    } else if (isAwsNotFound(result)) {
+      recordEvidence(state, "lightsail_static_ip", "not_found", staticIpName, ts);
+    } else {
+      throw new Error((result.stderr || result.stdout || `aws exited with ${result.exitCode}`).trim());
+    }
   } else {
     recordEvidence(state, "lightsail_static_ip", "skipped", "no lightsail_static_ip_name recorded", ts);
   }
 
   if (instanceName) {
-    await runAws(options, ["lightsail", "delete-instance", "--instance-name", instanceName]);
-    recordEvidence(state, "lightsail_instance", "deleted", instanceName, ts);
+    const result = await tryAws(options, ["lightsail", "delete-instance", "--instance-name", instanceName]);
+    if (result.exitCode === 0) {
+      recordEvidence(state, "lightsail_instance", "deleted", instanceName, ts);
+    } else if (isAwsNotFound(result)) {
+      recordEvidence(state, "lightsail_instance", "not_found", instanceName, ts);
+    } else {
+      throw new Error((result.stderr || result.stdout || `aws exited with ${result.exitCode}`).trim());
+    }
   } else {
     recordEvidence(state, "lightsail_instance", "skipped", "no lightsail_instance_name recorded", ts);
   }
 
   if (resources.key_name) {
-    await runAws(options, ["lightsail", "delete-key-pair", "--key-pair-name", String(resources.key_name)]);
-    recordEvidence(state, "key_pair", "deleted", String(resources.key_name), ts);
+    const result = await tryAws(options, ["lightsail", "delete-key-pair", "--key-pair-name", String(resources.key_name)]);
+    if (result.exitCode === 0) {
+      recordEvidence(state, "key_pair", "deleted", String(resources.key_name), ts);
+    } else if (isAwsNotFound(result)) {
+      recordEvidence(state, "key_pair", "not_found", String(resources.key_name), ts);
+    } else {
+      throw new Error((result.stderr || result.stdout || `aws exited with ${result.exitCode}`).trim());
+    }
   } else {
     recordEvidence(state, "key_pair", "skipped", "no key_name recorded", ts);
   }
@@ -162,6 +180,16 @@ async function runAws(options: DestroyOptions, args: string[]): Promise<CommandR
 async function tryAws(options: DestroyOptions, args: string[]): Promise<CommandResult> {
   const runner = options.runner ?? defaultRunner;
   return runner("aws", args);
+}
+
+function isAwsNotFound(result: CommandResult): boolean {
+  const text = `${result.stderr}\n${result.stdout}`.toLowerCase();
+  return result.exitCode !== 0 && (
+    text.includes("notfound")
+    || text.includes("not found")
+    || text.includes("does not exist")
+    || text.includes("doesn't exist")
+  );
 }
 
 async function runCommand(options: DestroyOptions, command: string, args: string[]): Promise<void> {

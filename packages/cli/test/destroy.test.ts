@@ -209,6 +209,62 @@ describe("destroy operation", () => {
     });
   });
 
+  it("continues Lightsail destroy when recorded resources are already missing", async () => {
+    const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-lightsail-missing-"));
+    const serviceDir = join(home, ".direxio", "nodes", "missing-lightsail.example.test");
+    mkdirSync(serviceDir, { recursive: true });
+    writeFileSync(
+      join(serviceDir, "state.json"),
+      JSON.stringify({
+        domain: "missing-lightsail.example.test",
+        cloud_provider: "lightsail",
+        domain_mode: "user",
+        agent_service_id: "missing-lightsail.example.test",
+        agent_service_dir: serviceDir,
+        resources: {
+          lightsail_instance_name: "direxio-missing-lightsail-example-test",
+          lightsail_static_ip_name: "direxio-ip-missing-lightsail-example-test",
+          key_name: "direxio-key-missing-lightsail-example-test"
+        }
+      }),
+      "utf8"
+    );
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await destroyService({
+      serviceId: "missing-lightsail.example.test",
+      serviceDir,
+      credentialsFile: join(serviceDir, "credentials.json")
+    }, {
+      now: () => "2026-07-02T03:04:05.000Z",
+      runner: async (command, args) => {
+        calls.push({ command, args });
+        if (command === "aws" && args[0] === "lightsail" && args[1] === "release-static-ip") {
+          return { stdout: "", stderr: "NotFoundException: The StaticIp does not exist", exitCode: 255 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    });
+
+    expect(calls).toEqual(expect.arrayContaining([
+      { command: "aws", args: ["lightsail", "delete-instance", "--instance-name", "direxio-missing-lightsail-example-test"] },
+      { command: "aws", args: ["lightsail", "delete-key-pair", "--key-pair-name", "direxio-key-missing-lightsail-example-test"] }
+    ]));
+    const reportPath = join(home, ".direxio", "reports", "missing-lightsail.example.test", "operation-report.json");
+    expect(JSON.parse(readFileSync(reportPath, "utf8"))).toMatchObject({
+      destroy: {
+        evidence: {
+          lightsail_static_ip: { status: "not_found" },
+          lightsail_instance: { status: "deleted" },
+          key_pair: { status: "deleted" }
+        }
+      },
+      billing: {
+        destroy_cleanup_status: "no_recorded_billable_resource_residue"
+      }
+    });
+  });
+
   it("does not touch Route53 for user-managed DNS state", async () => {
     const home = mkdtempSync(join(tmpdir(), "direxio-cli-destroy-user-dns-"));
     const serviceDir = join(home, ".direxio", "nodes", "user-dns.example.test");
