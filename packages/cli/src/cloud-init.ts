@@ -55,8 +55,53 @@ runcmd:
 `;
 }
 
+export function renderLightsailUserData(input: CloudInitInput): string {
+  const envFile = [
+    `DOMAIN=${input.domain}`,
+    `ACME_EMAIL=${input.acmeEmail ?? ""}`,
+    `MESSAGE_SERVER_IMAGE=${input.messageServerImage ?? "direxio/message-server:latest"}`
+  ].join("\n");
+  return `#!/usr/bin/env bash
+set -euxo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+mkdir -p /var/direxio-message-server
+${writeHeredoc("/var/direxio-message-server/.env", envFile, "0600", "DIREXIO_ENV")}
+${writeHeredoc("/var/direxio-message-server/docker-compose.yml", dockerComposeYml, "0644", "DIREXIO_COMPOSE")}
+${writeHeredoc("/var/direxio-message-server/Caddyfile", caddyfile, "0644", "DIREXIO_CADDY")}
+${writeHeredoc("/var/direxio-message-server/init-tokens.sh", initTokensSh, "0755", "DIREXIO_INIT_TOKENS")}
+
+apt-get update
+apt-get install -y ca-certificates curl gnupg
+curl -fsSL https://get.docker.com | sh
+systemctl enable --now docker
+
+TOK=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)
+IP=""
+if [ -n "$TOK" ]; then
+  IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOK" http://169.254.169.254/latest/meta-data/public-ipv4 || true)
+fi
+[ -n "$IP" ] || IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+grep -q '^PUBLIC_IP=' /var/direxio-message-server/.env || echo "PUBLIC_IP=$IP" >> /var/direxio-message-server/.env
+grep -q '^TURN_SECRET=' /var/direxio-message-server/.env || echo "TURN_SECRET=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 40)" >> /var/direxio-message-server/.env
+grep -q '^P2P_PORTAL_PASSWORD=' /var/direxio-message-server/.env || echo "P2P_PORTAL_PASSWORD=$(od -An -N4 -tu4 /dev/urandom | awk '{printf "%08d", $1 % 100000000}')" >> /var/direxio-message-server/.env
+mkdir -p /var/direxio-message-server/p2p
+chmod 700 /var/direxio-message-server
+cd /var/direxio-message-server
+docker compose --env-file .env up -d
+DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2-) bash init-tokens.sh
+`;
+}
+
 function yamlBlock(value: string): string {
   return value.trimEnd().split(/\r?\n/).map((line) => `      ${line}`).join("\n");
+}
+
+function writeHeredoc(path: string, content: string, mode: string, marker: string): string {
+  return `cat > ${path} <<'${marker}'
+${content.trimEnd()}
+${marker}
+chmod ${mode} ${path}`;
 }
 
 const dockerComposeYml = `networks:

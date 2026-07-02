@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { promises as dnsPromises } from "node:dns";
 import { resolveAgentProvider } from "./agents/registry.js";
 import type { AgentProvider } from "./agents/types.js";
-import { renderCloudInitUserData } from "./cloud-init.js";
+import { renderCloudInitUserData, renderLightsailUserData } from "./cloud-init.js";
 import { connectInstall, defaultRunner, writeConnectConfig, type CommandResult, type CommandRunner } from "./connect.js";
 import { installMcpTarget, writeMcpTargetArtifacts } from "./mcp-config.js";
 import type { ServiceConfig, ServiceContext } from "./service-context.js";
@@ -1243,7 +1243,9 @@ async function lookupUbuntuAmi(options: DeployOptions): Promise<string> {
 
 function renderUserData(state: ServiceState, domain: string): string {
   const file = join(String(state.agent_service_dir), "user-data.yaml");
-  const content = renderCloudInitUserData({ domain });
+  const content = inferCloudProvider(state) === "lightsail"
+    ? renderLightsailUserData({ domain })
+    : renderCloudInitUserData({ domain });
   writeFileSync(file, content, "utf8");
   return file;
 }

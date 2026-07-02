@@ -380,6 +380,11 @@ describe("deploy operation", () => {
       expect.stringContaining("three months free")
     ]));
     expect(readFileSync(join(serviceDir, "direxio-key-lightsail-example-test.pem"), "utf8")).toBe("-----BEGIN RSA PRIVATE KEY-----\nLIGHTSAIL_KEY\n-----END RSA PRIVATE KEY-----\n");
+    const lightsailUserData = readFileSync(state.resources.user_data, "utf8");
+    expect(lightsailUserData).toMatch(/^#!\/usr\/bin\/env bash/);
+    expect(lightsailUserData).not.toContain("#cloud-config");
+    expect(lightsailUserData).toContain("cat > /var/direxio-message-server/docker-compose.yml <<'DIREXIO_COMPOSE'");
+    expect(lightsailUserData).toContain("docker compose --env-file .env up -d");
     expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "lightsail" && normalizedAwsArgs(call.args)[1] === "create-instances")).toBe(true);
     expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "lightsail" && normalizedAwsArgs(call.args)[1] === "get-instance")).toBe(true);
     expect(calls.some((call) => call.command === "aws" && normalizedAwsArgs(call.args)[0] === "ec2" && normalizedAwsArgs(call.args)[1] === "run-instances")).toBe(false);
