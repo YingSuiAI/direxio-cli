@@ -419,7 +419,7 @@ function deployConfirmCommand(
   appendOption(args, "--agent-install", options.agentInstallMode);
   appendOption(args, "--mcp-target", options.mcpTarget);
   appendOption(args, "--workspace", options.workspace);
-  if (!argv.includes("--confirm-domain")) args.push("--confirm-domain");
+  args.push("--confirm-domain");
   if (options.confirmDnsOverwrite && !argv.includes("--confirm-dns-overwrite")) args.push("--confirm-dns-overwrite");
   args.push("--confirm-deploy");
   return args.map(shellArg).join(" ");

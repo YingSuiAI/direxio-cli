@@ -769,6 +769,7 @@ describe("direxio CLI", () => {
       expect.objectContaining({ id: "local_install", selected: "auto" })
     ]));
     expect(plan.confirm_command).toContain("--confirm-deploy");
+    expect(plan.confirm_command).toContain("--confirm-domain");
     expect(calls.some((call) => call.command === "aws" && call.args.includes("create-instances"))).toBe(false);
     expect(calls.some((call) => call.command === "aws" && call.args.includes("run-instances"))).toBe(false);
   });
